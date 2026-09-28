@@ -167,6 +167,8 @@ function validateAttachment(a) {
 }
 async function notifyPush(userId, payload) {
   if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return;
+  const target=findUser(userId);
+  if (target?.notificationSettings?.push === false) return;
   const list = db.data.pushSubscriptions.filter(x => x.userId === userId);
   for (const item of list) {
     try { await webpush.sendNotification(item.subscription, JSON.stringify(payload)); }
