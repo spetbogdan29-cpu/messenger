@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#3390ec">
-<title>Messenger 3.0</title>
+<title>Messenger 3.2</title>
 <style>
 :root{--blue:#3390ec;--bg:#eef3f7;--panel:#fff;--text:#17212b;--muted:#7d8b99;--line:#e4e9ee;--bubble:#fff;--mine:#d9fdd3}
 *{box-sizing:border-box}html,body{margin:0;height:100%;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:var(--text);background:var(--bg)}
@@ -39,7 +39,7 @@ button,input,textarea{font:inherit}button{border:0;cursor:pointer}.hidden{displa
 <div id="status" class="status"></div>
 <section id="auth">
   <div class="auth-card">
-    <h1>💬 Messenger 3.0</h1><p>Личные сообщения, группы, файлы и профиль</p>
+    <h1>💬 Messenger 3.2</h1><p>Личные сообщения, группы, файлы и профиль</p>
     <input id="login" class="field" placeholder="Логин" autocomplete="username">
     <input id="password" class="field" placeholder="Пароль" type="password" autocomplete="current-password">
     <div class="auth-actions"><button id="loginBtn" class="primary">Войти</button><button id="registerBtn" class="secondary">Регистрация</button></div>
@@ -75,12 +75,27 @@ button,input,textarea{font:inherit}button{border:0;cursor:pointer}.hidden{displa
   </main>
 </section>
 
+<div id="userProfileModal" class="modal hidden"><div class="modal-card">
+  <div class="modal-head"><h2>Профиль пользователя</h2><button class="close" data-close="userProfileModal">×</button></div>
+  <img id="userProfileAvatar" class="preview" alt="">
+  <div style="text-align:center">
+    <h2 id="userProfileName" style="margin:4px 0"></h2>
+    <div id="userProfileUsername" style="color:var(--muted)"></div>
+    <div id="userProfileStatus" style="margin-top:8px"></div>
+  </div>
+  <div style="margin-top:18px;padding:12px;background:#eef3f7;border-radius:14px">
+    <div style="font-size:12px;color:var(--muted);margin-bottom:4px">Статус / о себе</div>
+    <div id="userProfileBio" style="white-space:pre-wrap;overflow-wrap:anywhere"></div>
+  </div>
+  <button id="userProfileChat" class="primary" style="width:100%;margin-top:14px">💬 Написать сообщение</button>
+</div></div>
+
 <div id="profileModal" class="modal hidden"><div class="modal-card">
   <div class="modal-head"><h2>Мой профиль</h2><button class="close" data-close="profileModal">×</button></div>
   <img id="profilePreview" class="preview" alt="">
   <input id="avatarInput" type="file" accept="image/*" class="field">
   <input id="profileName" class="field" placeholder="Имя">
-  <textarea id="profileBio" class="field" maxlength="160" placeholder="О себе"></textarea>
+  <textarea id="profileBio" class="field" maxlength="160" placeholder="Статус / о себе"></textarea>
   <button id="saveProfile" class="primary" style="width:100%">Сохранить</button>
 </div></div>
 
@@ -161,15 +176,29 @@ async function onWS(e){let d;try{d=JSON.parse(e.data)}catch{return}
 function notifyForeground(m){const title=currentType==="group"?(current?.name||"Новое сообщение"):userName(m.from);toast("💬 "+title+": "+(m.text||"📎 файл"));if(document.hidden&&"Notification"in window&&Notification.permission==="granted")new Notification(title,{body:m.text||"📎 Файл"})}
 
 $("backBtn").onclick=()=>{$("sidebar").classList.remove("hide-mobile");$("chat").classList.remove("open");current=null};
-$("profileBtn").onclick=()=>{ $("profileName").value=me.displayName||me.username;$("profileBio").value=me.bio||"";$("profilePreview").src=me.avatar||"";if(!me.avatar)$("profilePreview").alt=initial(me.displayName||me.username);$("profileModal").classList.remove("hidden")};
-$("avatarInput").onchange=async e=>{const f=e.target.files[0];if(!f)return;if(f.size>500000)return toast("Аватар максимум 500 КБ");avatarData=(await readFile(f)).data;$("profilePreview").src=avatarData};
+$("chatAvatar").onclick=()=>{if(currentType==="user")openUserProfile(current)};
+$("chatTitle").onclick=()=>{if(currentType==="user")openUserProfile(current);else openGroupInfo()};
+$("chatAvatar").style.cursor="pointer";
+$("profileBtn").onclick=()=>{ avatarData=""; $("avatarInput").value=""; $("profileName").value=me.displayName||me.username;$("profileBio").value=me.bio||"";$("profilePreview").src=me.avatar||"";if(!me.avatar)$("profilePreview").alt=initial(me.displayName||me.username);$("profileModal").classList.remove("hidden")};
+$("avatarInput").onchange=async e=>{const f=e.target.files[0];if(!f)return;if(!f.type.startsWith("image/"))return toast("Выбери изображение");if(f.size>500000)return toast("Аватар максимум 500 КБ");avatarData=(await readFile(f)).data;$("profilePreview").src=avatarData};
 $("saveProfile").onclick=async()=>{try{const body={displayName:$("profileName").value.trim(),bio:$("profileBio").value.trim()};if(avatarData)body.avatar=avatarData;const d=await api("/api/me",{method:"PUT",body:JSON.stringify(body)});me=d.user;avatarData="";renderMe();$("profileModal").classList.add("hidden");await loadUsers();renderList()}catch(e){toast(e.message)}};
+function openUserProfile(u){
+  if(!u||u.id===me.id)return;
+  avatar($("userProfileAvatar"),u);
+  $("userProfileName").textContent=u.displayName||u.username;
+  $("userProfileUsername").textContent="@"+u.username;
+  $("userProfileStatus").textContent=u.online?"● В сети":lastSeen(u.lastSeen);
+  $("userProfileStatus").className=u.online?"online":"";
+  $("userProfileBio").textContent=u.bio||"Пользователь пока ничего не написал.";
+  $("userProfileChat").onclick=()=>{$("userProfileModal").classList.add("hidden");openChat(u,"user")};
+  $("userProfileModal").classList.remove("hidden");
+}
+
 
 $("newGroupBtn").onclick=async()=>{await loadUsers();$("memberList").innerHTML="";users.forEach(u=>{const row=document.createElement("label");row.className="member";const c=document.createElement("input");c.type="checkbox";c.value=u.id;const a=document.createElement("span");a.textContent=u.displayName+" (@"+u.username+")";row.append(c,a);$("memberList").appendChild(row)});$("groupName").value="";$("groupModal").classList.remove("hidden")};
 $("createGroup").onclick=async()=>{const ids=[...$("memberList").querySelectorAll("input:checked")].map(x=>x.value);try{const d=await api("/api/groups",{method:"POST",body:JSON.stringify({name:$("groupName").value,memberIds:ids})});groups.push(d.group);$("groupModal").classList.add("hidden");$("groupsTab").click();openChat(d.group,"group")}catch(e){toast(e.message)}};
 
 function openGroupInfo(){if(currentType!=="group")return;$("groupEditName").value=current.name;$("addMemberSelect").innerHTML="";users.filter(u=>!current.members.includes(u.id)).forEach(u=>{const o=document.createElement("option");o.value=u.id;o.textContent=u.displayName+" (@"+u.username+")";$("addMemberSelect").appendChild(o)});$("groupInfoModal").classList.remove("hidden")}
-$("chatTitle").onclick=()=>openGroupInfo();
 $("saveGroup").onclick=async()=>{try{const d=await api("/api/groups/"+current.id,{method:"PUT",body:JSON.stringify({name:$("groupEditName").value})});current=d.group;$("groupInfoModal").classList.add("hidden");await loadGroups();renderList();openChat(current,"group")}catch(e){toast(e.message)}};
 $("addMember").onclick=async()=>{try{const id=$("addMemberSelect").value;if(!id)return;const d=await api("/api/groups/"+current.id+"/members",{method:"POST",body:JSON.stringify({userId:id})});current=d.group;$("groupInfoModal").classList.add("hidden");await loadGroups();renderList();openChat(current,"group")}catch(e){toast(e.message)}};
 
