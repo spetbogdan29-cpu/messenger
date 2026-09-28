@@ -135,7 +135,7 @@ document.querySelectorAll("[data-close]").forEach(b=>b.onclick=()=>$(b.dataset.c
 $("loginBtn").onclick=()=>login(false);$("registerBtn").onclick=()=>login(true);
 async function login(reg){try{const d=await api(reg?"/api/register":"/api/login",{method:"POST",body:JSON.stringify({username:$("login").value,password:$("password").value})});token=d.token;me=d.user;localStorage.setItem("messenger_token",token);await start()}catch(e){toast(e.message)}}
 $("logoutBtn").onclick=()=>{localStorage.removeItem("messenger_token");location.reload()};
-async function start(){try{const d=await api("/api/me");me=d.user;auth.classList.add("hidden");app.classList.remove("hidden");renderMe();await loadAll();connect();registerPush()}catch(e){localStorage.removeItem("messenger_token");toast("Сессия истекла")}}
+async function start(){try{const d=await api("/api/me");me=d.user;auth.classList.add("hidden");app.classList.remove("hidden");renderMe();await loadSettings();await loadAll();connect();registerPush()}catch(e){localStorage.removeItem("messenger_token");toast("Сессия истекла")}}
 function renderMe(){avatar($("myAvatar"),me);$("myName").textContent=me.displayName||me.username;$("myUser").textContent="@"+me.username}
 async function loadAll(){await Promise.all([loadUsers(),loadGroups()]);renderList()}
 async function loadUsers(){const d=await api("/api/users");users=d.users||[]}
@@ -236,15 +236,87 @@ function sendReadReceipt(){if(!current||!ws||ws.readyState!==1)return;sendWS(cur
 function updateReadMark(messageId){const el=messages.querySelector(`[data-message-id="${messageId}"]`);if(!el)return;const meta=el.querySelector(".meta");if(!meta)return;meta.textContent=meta.textContent.replace(/ · [✓🕐✓]{1,2}$/,"")+" · ✓✓"}
 
 function optimisticMessage(m){if(!current)return;const empty=messages.querySelector(".empty");if(empty)messages.innerHTML="";renderMessage(m,true);scroll()}
-function replacePending(m){const el=messages.querySelector(`[data-client-id="${m.clientId}"]`);if(el){el.remove();renderMessage(m,false);scroll();return true}return false}
+function replacePending(m){const el=messages.querySelector('[data-client-id="'+m.clientId+'"]');if(el){el.remove();renderMessage(m,false);scroll();return true}return false}
 function flushOutbox(){if(!ws||ws.readyState!==1)return;const pending=outbox.splice(0);pending.forEach(sendWS)}
 async function edit(m){const t=prompt("Изменить сообщение:",m.text);if(t===null||!t.trim())return;sendWS({type:"edit",id:m.id,text:t.trim()})}
-function delMsg(m){if(confirm("Удалить сообщение?"))sendWS({type:"delete",id:m.id})}
+function delMsg(m){if(confirm("Удалить сообщение у всех участников?"))sendWS({type:"delete",id:m.id})}
+async function sendMessagePayload(text,attachment){
+  if(!current)return;const clientId=crypto.randomUUID();
+  const payload=currentType==="group"?{type:"groupMessage",groupId:current.id,text:text||" ",attachment,clientId,replyTo:replyTarget?.id||null,replyToText:replyTarget?.deleted?"Сообщение удалено":(replyTarget?.text||"📎 Файл")}:{type:"message",to:current.id,text:text||" ",attachment,clientId,replyTo:replyTarget?.id||null,replyToText:replyTarget?.deleted?"Сообщение удалено":(replyTarget?.text||"📎 Файл")};
+  optimisticMessage({...payload,from:me.id,createdAt:new Date().toISOString()});if(ws&&ws.readyState===1)sendWS(payload);else{outbox.push(payload);showStatus("🕐 Отправится при восстановлении связи")}
+}
+$("composer").onsubmit=async e=>{e.preventDefault();if(sendingMessage)return;const text=$("messageInput").value.trim();const f=$("fileInput").files[0];if(!current||(!text&&!f))return;sendingMessage=true;$("composer").querySelector(".send").disabled=true;try{let attachment=null;if(f){if(f.size>1800000)throw new Error("Файл слишком большой (максимум 1.8 МБ)");attachment=await readFile(f)}await sendMessagePayload(text,attachment);$("messageInput").value="";$("fileInput").value="";clearReply();$("messageInput").focus()}catch(err){toast(err.message)}finally{sendingMessage=false;$("composer").querySelector(".send").disabled=false}}
+function sendWS(x){if(!ws||ws.readyState!==1)return toast("Нет соединения с сервером");ws.send(JSON.stringify(x))}
+function connect(){if(!token)return;const p=location.protocol==="https:"?"wss:":"ws:";ws=new WebSocket(p+"//"+location.host+"/?token="+encodeURIComponent(token));ws.onopen=()=>{showStatus("🟢 Онлайн");flushOutbox()};ws.onclose=()=>{showStatus("🔴 Соединение потеряно");clearTimeout(reconnectTimer);reconnectTimer=setTimeout(connect,2500)};ws.onerror=e=>console.log(e);ws.onmessage=onWS}
+async function onWS(e){let d;try{d=JSON.parse(e.data)}catch{return}
+ if(d.type==="message"||d.type==="groupMessage"){const m=d.message;const replaced=replacePending(m);const relevant=current&&(currentType==="group"?m.groupId===current.id:((m.from===me.id&&m.to===current.id)||(m.from===current.id&&m.to===me.id)));if(relevant&&!replaced){if(messages.querySelector(".empty"))messages.innerHTML="";renderMessage(m);scroll();if(m.from!==me.id)sendReadReceipt()}else if(!replaced&&m.from!==me.id){notifyForeground(m)}if(d.type==="message"&&m.from!==me.id)await loadUsers();return}
+ if(d.type==="messageRead"||d.type==="groupMessageRead"){if(current){updateReadMark(d.messageId)}return} if(d.type==="reactionUpdated"){if(current){const relevant=currentType==="group"?d.message.groupId===current.id:((d.message.from===me.id&&d.message.to===current.id)||(d.message.from===current.id&&d.message.to===me.id));if(relevant){const old=messages.querySelector('[data-message-id="'+d.message.id+'"]');if(old){const wasPending=!!old.querySelector(".meta")?.textContent?.includes("🕐");old.remove();renderMessage(d.message,wasPending);scroll()}}}return}
 
-$("composer").onsubmit=async e=>{e.preventDefault();if(sendingMessage)return;const text=$("messageInput").value.trim();const f=$("fileInput").files[0];if(!current||(!text&&!f))return;sendingMessage=true;$("composer").querySelector(".send").disabled=true;try{let attachment=null;if(f){if(f.size>1800000)throw new Error("Файл слишком большой (максимум 1.8 МБ)");attachment=await readFile(f)}const clientId=crypto.randomUUID();const payload=currentType==="group"?{type:"groupMessage",groupId:current.id,text:text||" ",attachment,clientId,replyTo:replyTarget?.id||null,replyToText:replyTarget?.deleted?"Сообщение удалено":(replyTarget?.text||"📎 Файл")}:{type:"message",to:current.id,text:text||" ",attachment,clientId,replyTo:replyTarget?.id||null,replyToText:replyTarget?.deleted?"Сообщение удалено":(replyTarget?.text||"📎 Файл")};optimisticMessage({...payload,from:me.id,createdAt:new Date().toISOString()});if(ws&&ws.readyState===1)sendWS(payload);else{outbox.push(payload);showStatus("🕐 Отправится при восстановлении связи")}$("messageInput").value="";$("fileInput").value="";clearReply();$("messageInput").focus()}catch(err){toast(err.message)}finally{sendingMessage=false;$("composer").querySelector(".send").disabled=false}}
-function readFile(f){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res({name:f.name,type:f.type||"application/octet-stream",size:f.size,data:r.result});r.onerror=rej;r.readAsDataURL(f)})}
+ if(d.type==="messageUpdated"){if(current)currentType==="group"?loadGroupMessages():loadPrivate();return}
+ if(d.type==="presence"){const u=users.find(x=>x.id===d.userId);if(u){u.online=d.online;u.lastSeen=d.lastSeen}renderList();if(current?.id===d.userId&&currentType==="user"){$("chatSub").textContent=d.online?"● В сети":lastSeen(d.lastSeen)}return}
+ if(d.type==="userUpdated"){const i=users.findIndex(x=>x.id===d.user.id);if(i>=0)users[i]={...users[i],...d.user};if(me.id===d.user.id){me=d.user;renderMe()}renderList();return}
+ if(d.type==="groupCreated"||d.type==="groupUpdated"){await loadGroups();renderList();if(current&&d.group.id===current.id){current=d.group;avatar($("chatAvatar"),current);$("chatTitle").textContent=current.name;$("chatSub").textContent=current.members.length+" участников"}return}
+ if(d.type==="typing"){if(current&&(d.from===current.id||d.groupId===current.id)){ $("typing").textContent=d.typing?(currentType==="group"?userName(d.from)+" печатает...":"печатает..."):"";setTimeout(()=>$("typing").textContent="",1400)}}
+ if(d.type==="error"){if(d.clientId){const el=messages.querySelector(`[data-client-id="${d.clientId}"]`);if(el){el.querySelector(".meta").textContent="Не отправлено · "+(d.error||"Ошибка")}}toast(d.error||"Ошибка");}
+}
+function playNotifySound(){if(!settings.sound)return;try{const c=new (window.AudioContext||window.webkitAudioContext)(),o=c.createOscillator(),g=c.createGain();o.frequency.value=880;g.gain.value=.035;o.connect(g);g.connect(c.destination);o.start();o.stop(c.currentTime+.08)}catch{}}
+function notifyForeground(m){if(settings.foreground===false)return;const title=currentType==="group"?(current?.name||"Новое сообщение"):userName(m.from);toast("💬 "+title+": "+(m.text||"📎 файл"));playNotifySound();if(document.hidden&&"Notification"in window&&Notification.permission==="granted")new Notification(title,{body:m.text||"📎 Файл"})}
+
+$("backBtn").onclick=()=>{$("sidebar").classList.remove("hide-mobile");$("chat").classList.remove("open");current=null};
+$("pinBtn").onclick=()=>{const pins=[...messages.querySelectorAll("[data-message-id]")].filter(x=>x.querySelector(".reply-preview")?.textContent==="📌 Закреплено");if(pins[0])pins[0].scrollIntoView({behavior:"smooth",block:"center"});else toast("Закреплённых сообщений нет")};
+$("pinnedBar").onclick=()=>$("pinBtn").click();
+$("chatAvatar").onclick=()=>{if(currentType==="user")openUserProfile(current)};
+$("chatTitle").onclick=()=>{if(currentType==="user")openUserProfile(current);else openGroupInfo()};
+$("chatAvatar").style.cursor="pointer";
+$("profileBtn").onclick=()=>{ avatarData=""; $("avatarInput").value=""; $("profileName").value=me.displayName||me.username;$("profileBio").value=me.bio||"";$("profilePreview").src=me.avatar||"";if(!me.avatar)$("profilePreview").alt=initial(me.displayName||me.username);$("profileModal").classList.remove("hidden")};
+$("avatarInput").onchange=async e=>{const f=e.target.files[0];if(!f)return;if(!f.type.startsWith("image/"))return toast("Выбери изображение");if(f.size>500000)return toast("Аватар максимум 500 КБ");avatarData=(await readFile(f)).data;$("profilePreview").src=avatarData};
+$("saveProfile").onclick=async()=>{try{const body={displayName:$("profileName").value.trim(),bio:$("profileBio").value.trim()};if(avatarData)body.avatar=avatarData;const d=await api("/api/me",{method:"PUT",body:JSON.stringify(body)});me=d.user;avatarData="";renderMe();$("profileModal").classList.add("hidden");await loadUsers();renderList()}catch(e){toast(e.message)}};
+function openUserProfile(u){
+  if(!u||u.id===me.id)return;
+  avatar($("userProfileAvatar"),u);
+  $("userProfileName").textContent=u.displayName||u.username;
+  $("userProfileUsername").textContent="@"+u.username;
+  $("userProfileStatus").textContent=u.online?"● В сети":lastSeen(u.lastSeen);
+  $("userProfileStatus").className=u.online?"online":"";
+  $("userProfileBio").textContent=u.bio||"Пользователь пока ничего не написал.";
+  $("userProfileChat").onclick=()=>{$("userProfileModal").classList.add("hidden");openChat(u,"user")};
+  $("userProfileModal").classList.remove("hidden");
+}
+
+
+$("newGroupBtn").onclick=async()=>{await loadUsers();$("memberList").innerHTML="";users.forEach(u=>{const row=document.createElement("label");row.className="member";const c=document.createElement("input");c.type="checkbox";c.value=u.id;const a=document.createElement("span");a.textContent=u.displayName+" (@"+u.username+")";row.append(c,a);$("memberList").appendChild(row)});$("groupName").value="";$("groupModal").classList.remove("hidden")};
+$("createGroup").onclick=async()=>{const ids=[...$("memberList").querySelectorAll("input:checked")].map(x=>x.value);try{const d=await api("/api/groups",{method:"POST",body:JSON.stringify({name:$("groupName").value,memberIds:ids})});groups.push(d.group);$("groupModal").classList.add("hidden");$("groupsTab").click();openChat(d.group,"group")}catch(e){toast(e.message)}};
+
+function openGroupInfo(){if(currentType!=="group")return;$("groupEditName").value=current.name;$("addMemberSelect").innerHTML="";users.filter(u=>!current.members.includes(u.id)).forEach(u=>{const o=document.createElement("option");o.value=u.id;o.textContent=u.displayName+" (@"+u.username+")";$("addMemberSelect").appendChild(o)});$("groupInfoModal").classList.remove("hidden")}
+$("saveGroup").onclick=async()=>{try{const d=await api("/api/groups/"+current.id,{method:"PUT",body:JSON.stringify({name:$("groupEditName").value})});current=d.group;$("groupInfoModal").classList.add("hidden");await loadGroups();renderList();openChat(current,"group")}catch(e){toast(e.message)}};
+$("addMember").onclick=async()=>{try{const id=$("addMemberSelect").value;if(!id)return;const d=await api("/api/groups/"+current.id+"/members",{method:"POST",body:JSON.stringify({userId:id})});current=d.group;$("groupInfoModal").classList.add("hidden");await loadGroups();renderList();openChat(current,"group")}catch(e){toast(e.message)}};
+
+async function loadSettings(){try{const d=await api("/api/settings");settings=d.settings||settings;$("settingForeground").checked=settings.foreground!==false;$("settingSound").checked=settings.sound!==false;$("settingPush").checked=settings.push!==false}catch{}}
+$("settingsBtn").onclick=async()=>{await loadSettings();$("settingsModal").classList.remove("hidden")};
+$("saveSettings").onclick=async()=>{try{settings={foreground:$("settingForeground").checked,sound:$("settingSound").checked,push:$("settingPush").checked};await api("/api/settings",{method:"PUT",body:JSON.stringify(settings)});if(settings.push){if("Notification"in window&&Notification.permission==="default")await Notification.requestPermission();registerPush()}else{try{await api("/api/push/subscribe",{method:"DELETE"})}catch{}}$("settingsModal").classList.add("hidden");toast("Настройки сохранены")}catch(e){toast(e.message)}};
+
+async function registerPush(){try{if(settings.push===false)return;if(!("serviceWorker"in navigator)||!("Notification"in window))return;await navigator.serviceWorker.register("/sw.js");const cfg=await api("/api/push/config");if(!cfg.publicKey)return;if(Notification.permission==="default")return;const reg=await navigator.serviceWorker.ready;const sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64(cfg.publicKey)});await api("/api/push/subscribe",{method:"POST",body:JSON.stringify({subscription:sub})})}catch(e){console.log("push:",e.message)}}
+function urlBase64(s){const pad="=".repeat((4-s.length%4)%4),raw=atob((s+pad).replace(/-/g,"+").replace(/_/g,"/"));return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)))}
+$("demoNotif").onclick=async()=>{if(!("Notification"in window))return toast("Уведомления не поддерживаются");const p=await Notification.requestPermission();toast(p==="granted"?"Уведомления включены":"Уведомления отключены");if(p==="granted")registerPush()};
+
+if(token)start();
+</script>
+</body>
+</htmlfunction readFile(f){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res({name:f.name,type:f.type||"application/octet-stream",size:f.size,data:r.result});r.onerror=rej;r.readAsDataURL(f)})}
 $("attachBtn").onclick=()=>$("fileInput").click();
-$("messageInput").addEventListener("input",()=>{if(!ws||ws.readyState!==1||!current)return;sendWS(currentType==="group"?{type:"typing",groupId:current.id,typing:true}:{type:"typing",to:current.id,typing:true});clearTimeout(typingTimer);typingTimer=setTimeout(()=>sendWS(currentType==="group"?{type:"typing",groupId:current.id,typing:false}:{type:"typing",to:current.id,typing:false}),900)});
+$("micBtn").onclick=async()=>{
+  if(recording){mediaRecorder?.stop();return}
+  if(!navigator.mediaDevices?.getUserMedia||typeof MediaRecorder==="undefined")return toast("Голосовые сообщения не поддерживаются");
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true});mediaChunks=[];mediaRecorder=new MediaRecorder(stream);recording=true;$("micBtn").classList.add("voice-recording");$("micBtn").textContent="⏹";
+    mediaRecorder.ondataavailable=e=>{if(e.data.size)mediaChunks.push(e.data)};
+    mediaRecorder.onstop=async()=>{
+      recording=false;$("micBtn").classList.remove("voice-recording");$("micBtn").textContent="🎤";stream.getTracks().forEach(x=>x.stop());
+      const blob=new Blob(mediaChunks,{type:mediaRecorder.mimeType||"audio/webm"});if(blob.size>1800000)return toast("Голосовое слишком длинное");
+      const rr=new FileReader();rr.onload=async()=>{try{await sendMessagePayload("",{name:"voice-"+Date.now()+".webm",type:blob.type||"audio/webm",size:blob.size,data:rr.result});clearReply()}catch(e){toast(e.message)}};rr.readAsDataURL(blob)
+    };mediaRecorder.start()
+  }catch(e){toast("Нет доступа к микрофону")}
+};
 function sendWS(x){if(!ws||ws.readyState!==1)return toast("Нет соединения с сервером");ws.send(JSON.stringify(x))}
 function connect(){if(!token)return;const p=location.protocol==="https:"?"wss:":"ws:";ws=new WebSocket(p+"//"+location.host+"/?token="+encodeURIComponent(token));ws.onopen=()=>{showStatus("🟢 Онлайн");flushOutbox()};ws.onclose=()=>{showStatus("🔴 Соединение потеряно");clearTimeout(reconnectTimer);reconnectTimer=setTimeout(connect,2500)};ws.onerror=e=>console.log(e);ws.onmessage=onWS}
 async function onWS(e){let d;try{d=JSON.parse(e.data)}catch{return}
