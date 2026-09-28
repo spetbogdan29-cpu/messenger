@@ -31,7 +31,7 @@ db.data.groups ||= [];
 db.data.groupMessages ||= [];
 db.data.pushSubscriptions ||= [];
 
-app.use(helmet({ crossOriginEmbedderPolicy: false }));
+app.use(helmet({ crossOriginEmbedderPolicy: false, contentSecurityPolicy: false }));
 app.use(express.json({ limit: "6mb" }));
 app.use(rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true, legacyHeaders: false }));
 app.use(express.static(path.join(__dirname, "public")));
