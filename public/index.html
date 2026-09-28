@@ -180,7 +180,7 @@ async function loadPrivate(){const d=await api("/api/messages/"+encodeURICompone
 
 async function loadGroupMessages(){const d=await api("/api/groups/"+encodeURIComponent(current.id)+"/messages");renderMessages(d.messages||[]);sendReadReceipt()}
 
-function renderMessages(arr){messages.innerHTML="";if(!arr.length){messages.innerHTML='<div class="empty">Сообщений пока нет.<br>Напиши первым!</div>';return}arr.forEach(renderMessage);scroll()}
+function renderMessages(arr){messages.innerHTML="";const hasPins=arr.some(m=>m.pinnedAt);$("pinnedBar").classList.toggle("hidden",!hasPins);if(!arr.length){messages.innerHTML='<div class="empty">Сообщений пока нет.<br>Напиши первым!</div>';return}arr.forEach(renderMessage);scroll()}
 function replySource(m){
   if(!m.replyTo)return null;
   const all=[...messages.querySelectorAll("[data-message-id]")];
