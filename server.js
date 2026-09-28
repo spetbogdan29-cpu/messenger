@@ -124,7 +124,7 @@ function safeUser(u) {
   return {
     id: u.id, username: u.username, displayName: u.displayName || u.username,
     bio: u.bio || "", avatar: u.avatar || "", createdAt: u.createdAt,
-    lastSeen: u.lastSeen || null
+    lastSeen: u.lastSeen || null, favorites: u.favorites || [], notificationSettings: u.notificationSettings || {foreground:true,push:true,sound:true}
   };
 }
 function send(ws, payload) {
