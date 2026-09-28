@@ -228,13 +228,21 @@ app.get("/api/groups/:id/messages", auth, (req,res) => {
 
 async function createPrivate(from,to,text,attachment) {
   if (!findUser(to)) throw new Error("Получатель не найден");
-  const message={id:crypto.randomUUID(),from,to,text:cleanText(text),attachment:validateAttachment(attachment),createdAt:new Date().toISOString(),editedAt:null,deleted:false};
+  const file=validateAttachment(attachment);
+  const clean=String(text ?? "").trim();
+  if (!clean && !file) throw new Error("Добавь текст или файл");
+  if (clean.length>4000) throw new Error("Слишком длинное сообщение");
+  const message={id:crypto.randomUUID(),from,to,text:clean,attachment:file,createdAt:new Date().toISOString(),editedAt:null,deleted:false};
   db.data.messages.push(message); await db.write(); return message;
 }
 async function createGroup(from,groupId,text,attachment) {
   const g=groupFor(groupId);
   if (!g || !isMember(g,from)) throw new Error("Нет доступа к группе");
-  const message={id:crypto.randomUUID(),groupId,from,text:cleanText(text),attachment:validateAttachment(attachment),createdAt:new Date().toISOString(),editedAt:null,deleted:false};
+  const file=validateAttachment(attachment);
+  const clean=String(text ?? "").trim();
+  if (!clean && !file) throw new Error("Добавь текст или файл");
+  if (clean.length>4000) throw new Error("Слишком длинное сообщение");
+  const message={id:crypto.randomUUID(),groupId,from,text:clean,attachment:file,createdAt:new Date().toISOString(),editedAt:null,deleted:false};
   db.data.groupMessages.push(message); await db.write(); return message;
 }
 async function editIn(list,messageId,userId,text) {
