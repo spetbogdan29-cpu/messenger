@@ -103,7 +103,7 @@ button,input,textarea{font:inherit}button{border:0;cursor:pointer}.hidden{displa
 
 <script>
 const $=id=>document.getElementById(id);
-let token=localStorage.getItem("messenger_token")||"", me=null, ws=null, users=[], groups=[], current=null, currentType=null, avatarData="", reconnectTimer=null, typingTimer=null;
+let token=localStorage.getItem("messenger_token")||"", me=null, ws=null, users=[], groups=[], current=null, currentType=null, avatarData="", reconnectTimer=null, typingTimer=null, sendingMessage=false;
 const auth=$("auth"), app=$("app"), list=$("list"), messages=$("messages");
 
 function showStatus(t,ms=1800){const e=$("status");e.textContent=t;e.style.display="block";clearTimeout(showStatus.t);showStatus.t=setTimeout(()=>e.style.display="none",ms)}
@@ -140,7 +140,7 @@ function scroll(){messages.scrollTop=messages.scrollHeight}
 async function edit(m){const t=prompt("Изменить сообщение:",m.text);if(t===null||!t.trim())return;sendWS({type:"edit",id:m.id,text:t.trim()})}
 function delMsg(m){if(confirm("Удалить сообщение?"))sendWS({type:"delete",id:m.id})}
 
-$("composer").onsubmit=async e=>{e.preventDefault();const text=$("messageInput").value.trim();const f=$("fileInput").files[0];if(!current||(!text&&!f))return;let attachment=null;if(f){if(f.size>1800000)return toast("Файл слишком большой (максимум 1.8 МБ)");attachment=await readFile(f)}sendWS(currentType==="group"?{type:"groupMessage",groupId:current.id,text:text||" ",attachment}:{type:"message",to:current.id,text:text||" ",attachment});$("messageInput").value="";$("fileInput").value="";$("messageInput").focus()}
+$("composer").onsubmit=async e=>{e.preventDefault();if(sendingMessage)return;const text=$("messageInput").value.trim();const f=$("fileInput").files[0];if(!current||(!text&&!f))return;sendingMessage=true;$("composer").querySelector(".send").disabled=true;let attachment=null;if(f){if(f.size>1800000){sendingMessage=false;$("composer").querySelector(".send").disabled=false;return toast("Файл слишком большой (максимум 1.8 МБ)")}attachment=await readFile(f)}const clientId=crypto.randomUUID();sendWS(currentType==="group"?{type:"groupMessage",groupId:current.id,text:text||" ",attachment,clientId}:{type:"message",to:current.id,text:text||" ",attachment,clientId});$("messageInput").value="";$("fileInput").value="";$("messageInput").focus();setTimeout(()=>{sendingMessage=false;$("composer").querySelector(".send").disabled=false},450)}
 function readFile(f){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res({name:f.name,type:f.type||"application/octet-stream",size:f.size,data:r.result});r.onerror=rej;r.readAsDataURL(f)})}
 $("attachBtn").onclick=()=>$("fileInput").click();
 $("messageInput").addEventListener("input",()=>{if(!ws||ws.readyState!==1||!current)return;sendWS(currentType==="group"?{type:"typing",groupId:current.id,typing:true}:{type:"typing",to:current.id,typing:true});clearTimeout(typingTimer);typingTimer=setTimeout(()=>sendWS(currentType==="group"?{type:"typing",groupId:current.id,typing:false}:{type:"typing",to:current.id,typing:false}),900)});
