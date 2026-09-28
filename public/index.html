@@ -121,7 +121,7 @@ button,input,textarea{font:inherit}button{border:0;cursor:pointer}.hidden{displa
 
 <script>
 const $=id=>document.getElementById(id);
-let token=localStorage.getItem("messenger_token")||"", me=null, ws=null, users=[], groups=[], current=null, currentType=null, avatarData="", reconnectTimer=null, typingTimer=null, sendingMessage=false, outbox=[], replyTarget=null;
+let token=localStorage.getItem("messenger_token")||"", me=null, ws=null, users=[], groups=[], current=null, currentType=null, avatarData="", reconnectTimer=null, typingTimer=null, sendingMessage=false, outbox=[], replyTarget=null, favoriteMessages=[], listMode="people", settings={foreground:true,push:true,sound:true}, mediaRecorder=null, mediaChunks=[], recording=false;
 const auth=$("auth"), app=$("app"), list=$("list"), messages=$("messages");
 
 function showStatus(t,ms=1800){const e=$("status");e.textContent=t;e.style.display="block";clearTimeout(showStatus.t);showStatus.t=setTimeout(()=>e.style.display="none",ms)}
@@ -140,12 +140,41 @@ function renderMe(){avatar($("myAvatar"),me);$("myName").textContent=me.displayN
 async function loadAll(){await Promise.all([loadUsers(),loadGroups()]);renderList()}
 async function loadUsers(){const d=await api("/api/users");users=d.users||[]}
 async function loadGroups(){const d=await api("/api/groups");groups=d.groups||[]}
-function renderList(){const q=$("search").value.trim().toLowerCase();list.innerHTML="";const source=currentType==="group"||$("groupsTab").classList.contains("active")?groups:users;source.filter(x=>!q||((x.name||x.displayName||x.username||"").toLowerCase().includes(q))).forEach(x=>{const item=document.createElement("div");item.className="item "+(current?.id===x.id?"active":"");const av=document.createElement("div");av.className="avatar";avatar(av,x);const inf=document.createElement("div");inf.className="item-info";const t=document.createElement("div");t.className="item-title";t.textContent=x.name||x.displayName||x.username;const s=document.createElement("div");s.className="item-sub";s.textContent=x.name?"👥 "+x.memberCount+" участников":x.online?"● В сети":"Не в сети";if(x.online)s.classList.add("online");inf.append(t,s);item.append(av,inf);item.onclick=()=>openChat(x,x.name?"group":"user");list.appendChild(item)})}
-$("peopleTab").onclick=()=>{currentType="user";$("peopleTab").classList.add("active");$("groupsTab").classList.remove("active");renderList()};
-$("groupsTab").onclick=()=>{currentType="group";$("groupsTab").classList.add("active");$("peopleTab").classList.remove("active");renderList()};
+async function renderFavorites(){
+  try{
+    const d=await api("/api/favorites");favoriteMessages=d.messages||[];list.innerHTML="";
+    if(!favoriteMessages.length){list.innerHTML='<div class="empty">Избранных сообщений пока нет.</div>';return}
+    favoriteMessages.forEach(m=>{
+      const item=document.createElement("div");item.className="item";
+      const av=document.createElement("div");av.className="avatar";const inf=document.createElement("div");inf.className="item-info";
+      const t=document.createElement("div");t.className="item-title";const sub=document.createElement("div");sub.className="item-sub";
+      if(m.groupId){const g=groups.find(x=>x.id===m.groupId);avatar(av,g||{name:"Г"});t.textContent=g?.name||"Группа";sub.textContent=(m.text||"📎 файл").slice(0,80);item.onclick=()=>openChat(g,"group",m.id)}
+      else{const id=m.from===me.id?m.to:m.from;const u=users.find(x=>x.id===id);avatar(av,u||{username:"?"});t.textContent=u?.displayName||u?.username||"Пользователь";sub.textContent=(m.text||"📎 файл").slice(0,80);item.onclick=()=>openChat(u,"user",m.id)}
+      inf.append(t,sub);item.append(av,inf);list.appendChild(item);
+    });
+  }catch(e){toast(e.message)}
+}
+function renderList(){
+  if(listMode==="favorites"){renderFavorites();return}
+  const q=$("search").value.trim().toLowerCase();list.innerHTML="";const source=listMode==="groups"?groups:users;
+  source.filter(x=>!q||((x.name||x.displayName||x.username||"").toLowerCase().includes(q))).forEach(x=>{
+    const item=document.createElement("div");item.className="item "+(current?.id===x.id?"active":"");const av=document.createElement("div");av.className="avatar";avatar(av,x);
+    const inf=document.createElement("div");inf.className="item-info";const t=document.createElement("div");t.className="item-title";t.textContent=x.name||x.displayName||x.username;
+    const ss=document.createElement("div");ss.className="item-sub";ss.textContent=x.name?"👥 "+x.memberCount+" участников":x.online?"● В сети":"Не в сети";if(x.online)ss.classList.add("online");
+    inf.append(t,ss);item.append(av,inf);item.onclick=()=>openChat(x,x.name?"group":"user");list.appendChild(item)
+  })
+}
+$("peopleTab").onclick=()=>{listMode="people";currentType="user";$("peopleTab").classList.add("active");$("groupsTab").classList.remove("active");$("favoritesTab").classList.remove("active");renderList()};
+$("groupsTab").onclick=()=>{listMode="groups";currentType="group";$("groupsTab").classList.add("active");$("peopleTab").classList.remove("active");$("favoritesTab").classList.remove("active");renderList()};
+$("favoritesTab").onclick=()=>{listMode="favorites";$("favoritesTab").classList.add("active");$("peopleTab").classList.remove("active");$("groupsTab").classList.remove("active");renderList()};
 $("search").oninput=renderList;
 
-async function openChat(x,type){current=x;currentType=type;$("sidebar").classList.add("hide-mobile");$("chat").classList.add("open");avatar($("chatAvatar"),x);$("chatTitle").textContent=x.name||x.displayName||x.username;$("chatSub").textContent=type==="group"?x.memberCount+" участников":x.online?"● В сети":lastSeen(x.lastSeen);messages.innerHTML='<div class="empty">Загрузка...</div>';if(type==="group")await loadGroupMessages();else await loadPrivate()}
+async function openChat(x,type,focusMessageId=null){
+  if(!x)return;current=x;currentType=type;listMode=type==="group"?"groups":"people";$("sidebar").classList.add("hide-mobile");$("chat").classList.add("open");
+  avatar($("chatAvatar"),x);$("chatTitle").textContent=x.name||x.displayName||x.username;$("chatSub").textContent=type==="group"?(x.memberCount||x.members?.length||0)+" участников":x.online?"● В сети":lastSeen(x.lastSeen);
+  $("pinnedBar").classList.add("hidden");messages.innerHTML='<div class="empty">Загрузка...</div>';if(type==="group")await loadGroupMessages();else await loadPrivate();if(focusMessageId)focusMessage(focusMessageId)
+}
+function focusMessage(id){const el=messages.querySelector('[data-message-id="'+id+'"]');if(el){el.scrollIntoView({behavior:"smooth",block:"center"});el.style.outline="2px solid var(--blue)";setTimeout(()=>el.style.outline="",1600)}}
 function lastSeen(v){if(!v)return"Не в сети";return"был(а) "+new Date(v).toLocaleString("ru-RU",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}
 async function loadPrivate(){const d=await api("/api/messages/"+encodeURIComponent(current.id));renderMessages(d.messages||[]);sendReadReceipt()}
 
@@ -188,11 +217,21 @@ function renderReactions(wrap,m){
   if(box.children.length)wrap.appendChild(box);
 }
 
-function renderMessage(m,pending=false){const wrap=document.createElement("div");wrap.className="msg "+(m.from===me.id?"mine":"");if(m.clientId)wrap.dataset.clientId=m.clientId;if(m.id)wrap.dataset.messageId=m.id;if(m.replyTo){const q=document.createElement("div");q.className="reply-preview";q.style.cssText="padding:6px 8px;margin-bottom:5px;border-left:3px solid var(--blue);background:#f2f6fa;border-radius:7px";const target=messages.querySelector('[data-message-id="'+m.replyTo+'"]');const targetText=target?.querySelector(".bubble")?.textContent; q.textContent="↩ "+(targetText||m.replyToText||"Ответ на сообщение");q.onclick=()=>{const target=messages.querySelector('[data-message-id="'+m.replyTo+'"]');if(target)target.scrollIntoView({behavior:"smooth",block:"center"})};wrap.appendChild(q)}const b=document.createElement("div");b.className="bubble"+(m.deleted?" deleted":"");b.textContent=m.deleted?"Сообщение удалено":m.text||"";if(m.attachment&&!m.deleted)renderAttachment(b,m.attachment);wrap.appendChild(b);const meta=document.createElement("div");meta.className="meta";meta.textContent=(m.from!==me.id&&currentType==="group"?userName(m.from)+" · ":"")+new Date(m.createdAt).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"})+(m.editedAt?" · изменено":"")+(pending?" · 🕐":(readMark(m,false)?" · "+readMark(m,false):""));wrap.appendChild(meta);renderReactions(wrap,m);if(!m.deleted&&!pending){const a=document.createElement("div");a.className="actions";const reply=document.createElement("button");reply.textContent="Ответить";reply.onclick=()=>setReply(m);a.appendChild(reply);const react=document.createElement("button");react.textContent="😊 Реакция";react.onclick=()=>showReactionMenu(wrap,m);a.appendChild(react);if(m.from===me.id){const ed=document.createElement("button");ed.textContent="Изменить";ed.onclick=()=>edit(m);const del=document.createElement("button");del.textContent="Удалить";del.onclick=()=>delMsg(m);a.append(ed,del)}wrap.appendChild(a)}messages.appendChild(wrap)}
+function renderMessage(m,pending=false){
+  const wrap=document.createElement("div");wrap.className="msg "+(m.from===me.id?"mine":"");if(m.clientId)wrap.dataset.clientId=m.clientId;if(m.id)wrap.dataset.messageId=m.id;
+  if(m.pinnedAt){const pin=document.createElement("div");pin.className="reply-preview";pin.textContent="📌 Закреплено";wrap.appendChild(pin)}
+  if(m.replyTo){const q=document.createElement("div");q.className="reply-preview";q.style.cssText="padding:6px 8px;margin-bottom:5px;border-left:3px solid var(--blue);background:#f2f6fa;border-radius:7px";const target=messages.querySelector('[data-message-id="'+m.replyTo+'"]');q.textContent="↩ "+(target?.querySelector(".bubble")?.textContent||m.replyToText||"Ответ на сообщение");q.onclick=()=>focusMessage(m.replyTo);wrap.appendChild(q)}
+  const b=document.createElement("div");b.className="bubble"+(m.deleted?" deleted":"");b.textContent=m.deleted?"Сообщение удалено":m.text||"";if(m.attachment&&!m.deleted)renderAttachment(b,m.attachment);wrap.appendChild(b);
+  const meta=document.createElement("div");meta.className="meta";meta.textContent=(m.from!==me.id&&currentType==="group"?userName(m.from)+" · ":"")+new Date(m.createdAt).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"})+(m.editedAt?" · изменено":"")+(pending?" · 🕐":(readMark(m,false)?" · "+readMark(m,false):""));wrap.appendChild(meta);renderReactions(wrap,m);
+  if(!m.deleted&&!pending){const a=document.createElement("div");a.className="actions";const reply=document.createElement("button");reply.textContent="Ответить";reply.onclick=()=>setReply(m);const react=document.createElement("button");react.textContent="😊 Реакция";react.onclick=()=>showReactionMenu(wrap,m);const fav=document.createElement("button");fav.textContent=(me.favorites||[]).includes(m.id)?"⭐ Убрать":"⭐ В избранное";fav.onclick=()=>sendWS({type:"favorite",messageId:m.id});const pin=document.createElement("button");pin.textContent=m.pinnedAt?"📌 Открепить":"📌 Закрепить";pin.onclick=()=>sendWS({type:"pin",messageId:m.id});a.append(reply,react,fav,pin);
+    const dm=document.createElement("button");dm.textContent="🗑 У меня";dm.onclick=()=>{if(confirm("Удалить сообщение только у себя?"))sendWS({type:"deleteForMe",id:m.id})};a.appendChild(dm);
+    if(m.from===me.id){const ed=document.createElement("button");ed.textContent="Изменить";ed.onclick=()=>edit(m);const del=document.createElement("button");del.textContent="🗑 У всех";del.onclick=()=>delMsg(m);a.append(ed,del)}
+    wrap.appendChild(a)}
+  messages.appendChild(wrap)
+}
 function userName(id){const u=users.find(x=>x.id===id)||dbUser(id);return u?.displayName||u?.username||"Пользователь"}
 function dbUser(id){return id===me.id?me:null}
-function renderAttachment(parent,a){if(a.type.startsWith("image/")){const i=document.createElement("img");i.className="attach";i.src=a.data;i.alt=a.name;parent.appendChild(i)}const card=document.createElement("div");card.className="file-card";const link=document.createElement("a");link.href=a.data;link.download=a.name;link.textContent="📎 "+a.name+" ("+Math.max(1,Math.round((a.size||0)/1024))+" КБ)";card.appendChild(link);parent.appendChild(card)}
-function scroll(){messages.scrollTop=messages.scrollHeight}
+function renderAttachment(parent,a){if(a.type.startsWith("image/")){const i=document.createElement("img");i.className="attach";i.src=a.data;i.alt=a.name;parent.appendChild(i)}else if(a.type.startsWith("audio/")){const au=document.createElement("audio");au.controls=true;au.src=a.data;au.style.width="260px";parent.appendChild(au)}const card=document.createElement("div");card.className="file-card";const link=document.createElement("a");link.href=a.data;link.download=a.name;link.textContent=(a.type.startsWith("audio/")?"🎤 ":"📎 ")+a.name+" ("+Math.max(1,Math.round((a.size||0)/1024))+" КБ)";card.appendChild(link);parent.appendChild(card)}function scroll(){messages.scrollTop=messages.scrollHeight}
 function sendReadReceipt(){if(!current||!ws||ws.readyState!==1)return;sendWS(currentType==="group"?{type:"read",groupId:current.id}:{type:"read",to:current.id})}
 function updateReadMark(messageId){const el=messages.querySelector(`[data-message-id="${messageId}"]`);if(!el)return;const meta=el.querySelector(".meta");if(!meta)return;meta.textContent=meta.textContent.replace(/ · [✓🕐✓]{1,2}$/,"")+" · ✓✓"}
 
