@@ -3,15 +3,17 @@ import http from "http";
 import { WebSocketServer } from "ws";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { JSONFilePreset } from "lowdb/node";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import webpush from "web-push";
 import crypto from "crypto";
 import path from "path";
+import { readFile } from "fs/promises";
+import pg from "pg";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const { Pool } = pg;
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
@@ -22,14 +24,69 @@ if (JWT_SECRET === "CHANGE_THIS_SECRET_IN_PRODUCTION") {
   console.warn("WARNING: set JWT_SECRET in Render environment variables.");
 }
 
-const db = await JSONFilePreset(path.join(__dirname, "data", "db.json"), {
-  users: [], messages: [], groups: [], groupMessages: [], pushSubscriptions: []
+if (!process.env.DATABASE_URL) {
+  throw new Error("DATABASE_URL is not set. Add the Neon PostgreSQL connection string to Render Environment.");
+}
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 5,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 10_000
 });
-db.data.users ||= [];
-db.data.messages ||= [];
-db.data.groups ||= [];
-db.data.groupMessages ||= [];
-db.data.pushSubscriptions ||= [];
+
+const defaultData = {
+  users: [], messages: [], groups: [], groupMessages: [], pushSubscriptions: []
+};
+
+function normalizeData(data) {
+  data ||= {};
+  data.users ||= [];
+  data.messages ||= [];
+  data.groups ||= [];
+  data.groupMessages ||= [];
+  data.pushSubscriptions ||= [];
+  return data;
+}
+
+await pool.query(`
+  CREATE TABLE IF NOT EXISTS app_state (
+    id INTEGER PRIMARY KEY,
+    data JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )
+`);
+
+const stateResult = await pool.query("SELECT data FROM app_state WHERE id = 1");
+let initialData;
+
+if (stateResult.rows.length) {
+  initialData = normalizeData(stateResult.rows[0].data);
+} else {
+  try {
+    const localFile = await readFile(path.join(__dirname, "data", "db.json"), "utf8");
+    initialData = normalizeData(JSON.parse(localFile));
+  } catch {
+    initialData = defaultData;
+  }
+
+  await pool.query(
+    "INSERT INTO app_state (id, data) VALUES (1, $1::jsonb) ON CONFLICT (id) DO NOTHING",
+    [initialData]
+  );
+}
+
+const db = {
+  data: initialData,
+  async write() {
+    await pool.query(
+      "UPDATE app_state SET data = $1::jsonb, updated_at = NOW() WHERE id = 1",
+      [this.data]
+    );
+  }
+};
+
+console.log("PostgreSQL persistence: connected");
 
 app.use(helmet({ crossOriginEmbedderPolicy: false, contentSecurityPolicy: false }));
 app.use(express.json({ limit: "6mb" }));
@@ -317,7 +374,11 @@ wss.on("connection",(ws,req)=>{
   } catch { ws.close(1008,"Unauthorized"); }
 });
 
-app.get("/health",(req,res)=>res.json({ok:true,version:"3.0.0",users:db.data.users.length,groups:db.data.groups.length}));
+app.get("/health",(req,res)=>res.json({ok:true,version:"3.1.0",storage:"postgresql",users:db.data.users.length,groups:db.data.groups.length}));
 app.use((req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
 
-server.listen(PORT,"0.0.0.0",()=>console.log("Messenger 3.0 running on port "+PORT));
+server.listen(PORT,"0.0.0.0",()=>console.log("Messenger 3.1 running on port "+PORT));
+
+process.on("SIGTERM", async () => {
+  try { await pool.end(); } finally { process.exit(0); }
+});
