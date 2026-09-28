@@ -318,6 +318,35 @@ async function deleteIn(list,messageId,userId) {
   m.text=""; m.deleted=true; m.editedAt=new Date().toISOString(); await db.write(); return m;
 }
 
+const ALLOWED_REACTIONS = new Set(["❤️","👍","😂","😮","😢","🔥"]);
+
+async function toggleReaction(userId, messageId, emoji) {
+  if (!ALLOWED_REACTIONS.has(emoji)) throw new Error("Недопустимая реакция");
+  const privateM = db.data.messages.find(m=>m.id===messageId);
+  const groupM = db.data.groupMessages.find(m=>m.id===messageId);
+  const m = privateM || groupM;
+  if (!m) throw new Error("Сообщение не найдено");
+  if (privateM && m.from !== userId && m.to !== userId) throw new Error("Нет доступа");
+  if (groupM) {
+    const g=groupFor(m.groupId);
+    if (!g || !isMember(g,userId)) throw new Error("Нет доступа");
+  }
+  m.reactions = m.reactions || {};
+  m.reactions[emoji] = Array.isArray(m.reactions[emoji]) ? m.reactions[emoji] : [];
+  const i=m.reactions[emoji].indexOf(userId);
+  if(i>=0) m.reactions[emoji].splice(i,1);
+  else m.reactions[emoji].push(userId);
+  if(!m.reactions[emoji].length) delete m.reactions[emoji];
+  await db.write();
+  if(privateM){
+    sendUser(m.from,{type:"reactionUpdated",message:m});
+    sendUser(m.to,{type:"reactionUpdated",message:m});
+  } else {
+    const g=groupFor(m.groupId);
+    for(const id of g.members) sendUser(id,{type:"reactionUpdated",message:m});
+  }
+}
+
 async function markPrivateRead(readerId, otherId) {
   const now = new Date().toISOString();
   const changed = [];
@@ -403,6 +432,8 @@ wss.on("connection",(ws,req)=>{
         } else if(d.type==="read"){
           if(d.groupId) await markGroupRead(user.id,d.groupId);
           else if(d.to) await markPrivateRead(user.id,d.to);
+        } else if(d.type==="reaction"){
+          await toggleReaction(user.id,d.messageId,d.emoji);
         } else if(d.type==="typing"){
           if(d.to) sendUser(d.to,{type:"typing",from:user.id,typing:!!d.typing});
           if(d.groupId){const g=groupFor(d.groupId); if(g) for(const id of g.members) if(id!==user.id) sendUser(id,{type:"typing",from:user.id,groupId:g.id,typing:!!d.typing});}
