@@ -374,7 +374,7 @@ wss.on("connection",(ws,req)=>{
   } catch { ws.close(1008,"Unauthorized"); }
 });
 
-app.get("/health",(req,res)=>res.json({ok:true,version:"3.1.0",storage:"postgresql",users:db.data.users.length,groups:db.data.groups.length}));
+app.get("/health",(req,res)=>res.json({ok:true,version:"3.2.0",storage:"postgresql",users:db.data.users.length,groups:db.data.groups.length}));
 app.use((req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
 
 server.listen(PORT,"0.0.0.0",()=>console.log("Messenger 3.1 running on port "+PORT));
