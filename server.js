@@ -18,10 +18,9 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 const PORT = process.env.PORT || 3000;
-const JWT_SECRET = process.env.JWT_SECRET || "CHANGE_THIS_SECRET_IN_PRODUCTION";
-
-if (JWT_SECRET === "CHANGE_THIS_SECRET_IN_PRODUCTION") {
-  console.warn("WARNING: set JWT_SECRET in Render environment variables.");
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+  throw new Error("JWT_SECRET is missing or too short. Set a random secret of at least 32 characters in Render Environment.");
 }
 
 if (!process.env.DATABASE_URL) {
