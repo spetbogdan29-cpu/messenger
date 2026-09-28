@@ -226,23 +226,25 @@ app.get("/api/groups/:id/messages", auth, (req,res) => {
   res.json({messages:db.data.groupMessages.filter(m=>m.groupId===g.id).sort((a,b)=>a.createdAt.localeCompare(b.createdAt)).slice(-300)});
 });
 
-async function createPrivate(from,to,text,attachment) {
+async function createPrivate(from,to,text,attachment,clientId) {
   if (!findUser(to)) throw new Error("Получатель не найден");
   const file=validateAttachment(attachment);
   const clean=String(text ?? "").trim();
   if (!clean && !file) throw new Error("Добавь текст или файл");
   if (clean.length>4000) throw new Error("Слишком длинное сообщение");
-  const message={id:crypto.randomUUID(),from,to,text:clean,attachment:file,createdAt:new Date().toISOString(),editedAt:null,deleted:false};
+  if (clientId) { const existing=db.data.messages.find(m=>m.from===from && m.clientId===clientId); if (existing) return null; }
+  const message={id:crypto.randomUUID(),from,to,text:clean,attachment:file,clientId:clientId||null,createdAt:new Date().toISOString(),editedAt:null,deleted:false};
   db.data.messages.push(message); await db.write(); return message;
 }
-async function createGroup(from,groupId,text,attachment) {
+async function createGroup(from,groupId,text,attachment,clientId) {
   const g=groupFor(groupId);
   if (!g || !isMember(g,from)) throw new Error("Нет доступа к группе");
   const file=validateAttachment(attachment);
   const clean=String(text ?? "").trim();
   if (!clean && !file) throw new Error("Добавь текст или файл");
   if (clean.length>4000) throw new Error("Слишком длинное сообщение");
-  const message={id:crypto.randomUUID(),groupId,from,text:clean,attachment:file,createdAt:new Date().toISOString(),editedAt:null,deleted:false};
+  if (clientId) { const existing=db.data.groupMessages.find(m=>m.from===from && m.clientId===clientId); if (existing) return null; }
+  const message={id:crypto.randomUUID(),groupId,from,text:clean,attachment:file,clientId:clientId||null,createdAt:new Date().toISOString(),editedAt:null,deleted:false};
   db.data.groupMessages.push(message); await db.write(); return message;
 }
 async function editIn(list,messageId,userId,text) {
@@ -285,11 +287,12 @@ wss.on("connection",(ws,req)=>{
       try {
         const d=JSON.parse(raw.toString());
         if(d.type==="message"){
-          const m=await createPrivate(user.id,d.to,d.text,d.attachment);
+          const m=await createPrivate(user.id,d.to,d.text,d.attachment,d.clientId);
+          if (!m) return;
           sendUser(m.from,{type:"message",message:m}); sendUser(m.to,{type:"message",message:m});
           await notifyPush(m.to,{title:findUser(m.from)?.displayName||findUser(m.from)?.username||"Новое сообщение",body:m.attachment?"📎 Файл":m.text,data:{kind:"private",from:m.from}});
         } else if(d.type==="groupMessage"){
-          const m=await createGroup(user.id,d.groupId,d.text,d.attachment), g=groupFor(d.groupId);
+          const m=await createGroup(user.id,d.groupId,d.text,d.attachment,d.clientId); if (!m) return; const g=groupFor(d.groupId);
           for(const id of g.members) sendUser(id,{type:"groupMessage",message:m});
           for(const id of g.members) if(id!==user.id) await notifyPush(id,{title:g.name,body:m.attachment?"📎 Файл":m.text,data:{kind:"group",groupId:g.id}});
         } else if(d.type==="edit"){
