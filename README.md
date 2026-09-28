@@ -1,20 +1,48 @@
-# Mini Messenger — Render
+# Messenger 3.3
 
-Готовая версия для публикации на Render.
+Веб-мессенджер на Node.js + Express + WebSocket + PostgreSQL.
+
+## Что уже есть
+
+- регистрация и вход
+- личные сообщения и группы
+- WebSocket в реальном времени
+- оптимистическая отправка и офлайн-очередь
+- редактирование и удаление
+- удаление сообщения только у себя
+- ответы на сообщения
+- реакции ❤️ 👍 😂 😮 😢 🔥
+- избранные сообщения ⭐
+- закрепление сообщений 📌
+- прочитано ✓ / ✓✓
+- онлайн и время последнего посещения
+- профили, аватары и описание
+- вложения и голосовые сообщения
+- браузерные и Web Push-уведомления
+- настройки уведомлений
+- PWA/установка на Android
+- базовые меры защиты: JWT, bcrypt, Helmet, rate limit, авторизация WebSocket
 
 ## Render
-- Build Command: `npm install`
-- Start Command: `npm start`
-- Plan: Free для тестирования
-- Добавь Environment Variable: `JWT_SECRET` = длинная случайная строка
 
-Приложение использует WebSocket для сообщений в реальном времени. Render поддерживает WebSocket.
+- Build: `npm install`
+- Start: `npm start`
+- Environment: `DATABASE_URL`, `JWT_SECRET`
+- Для Web Push: `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`
 
-### Важно про хранение данных
-Сейчас пользователи и сообщения хранятся в `data/db.json`. На бесплатном Render файловая система временная: данные могут исчезнуть после перезапуска/деплоя. Для постоянного хранения позже подключим PostgreSQL.
+Render автоматически запускает новый deploy после push в связанную ветку, если Auto-Deploy включён.
+
+## Хранение
+
+Текущая рабочая версия использует PostgreSQL через `app_state` с JSONB. Это безопаснее временной файловой базы Render, но при большом количестве пользователей следующий этап — нормализация в отдельные таблицы users/messages/groups/group_members/push_subscriptions.
+
+## Android
+
+См. [android/README.md](android/README.md) для упаковки PWA в APK через Trusted Web Activity/Bubblewrap.
 
 ## Локальный запуск
+
 ```bash
 npm install
-npm start
+JWT_SECRET='local-secret' DATABASE_URL='postgresql://...' npm start
 ```
