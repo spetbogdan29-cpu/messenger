@@ -307,7 +307,7 @@ wss.on("connection",(ws,req)=>{
           if(d.to) sendUser(d.to,{type:"typing",from:user.id,typing:!!d.typing});
           if(d.groupId){const g=groupFor(d.groupId); if(g) for(const id of g.members) if(id!==user.id) sendUser(id,{type:"typing",from:user.id,groupId:g.id,typing:!!d.typing});}
         }
-      } catch(e){ send(ws,{type:"error",error:e.message||"Ошибка"}); }
+      } catch(e){ send(ws,{type:"error",error:e.message||"Ошибка",clientId:(typeof d!=="undefined"?d.clientId:null)}); }
     });
     ws.on("close",async()=>{
       const set=sockets.get(user.id); if(!set) return;
