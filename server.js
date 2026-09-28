@@ -290,7 +290,8 @@ async function createPrivate(from,to,text,attachment,clientId,replyTo) {
   if (!clean && !file) throw new Error("Добавь текст или файл");
   if (clean.length>4000) throw new Error("Слишком длинное сообщение");
   if (clientId) { const existing=db.data.messages.find(m=>m.from===from && m.clientId===clientId); if (existing) return null; }
-  const reply = replyTo ? db.data.messages.find(x => x.id === replyTo && ((x.from===from&&x.to===to)||(x.from===to&&x.to===from))) : null;\n  const message={id:crypto.randomUUID(),from,to,text:clean,attachment:file,clientId:clientId||null,replyTo:reply?.id||null,createdAt:new Date().toISOString(),editedAt:null,deleted:false,readAt:null};
+  const reply = replyTo ? db.data.messages.find(x => x.id === replyTo && ((x.from===from&&x.to===to)||(x.from===to&&x.to===from))) : null;
+  const message={id:crypto.randomUUID(),from,to,text:clean,attachment:file,clientId:clientId||null,replyTo:reply?.id||null,createdAt:new Date().toISOString(),editedAt:null,deleted:false,readAt:null};
   db.data.messages.push(message); await db.write(); return message;
 }
 async function createGroup(from,groupId,text,attachment,clientId,replyTo) {
