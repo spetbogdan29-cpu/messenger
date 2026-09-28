@@ -8,7 +8,7 @@
 <style>
 :root{--blue:#3390ec;--bg:#eef3f7;--panel:#fff;--text:#17212b;--muted:#7d8b99;--line:#e4e9ee;--bubble:#fff;--mine:#d9fdd3}
 *{box-sizing:border-box}html,body{margin:0;height:100%;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:var(--text);background:var(--bg)}
-button,input,textarea{font:inherit}button{border:0;cursor:pointer}.hidden{display:none!important}
+button,input,textarea{font:inherit}button{border:0;cursor:pointer}.hidden{display:none!important}.reply-bar{display:flex;align-items:center;gap:10px;padding:8px 12px;background:#fff;border-top:1px solid var(--line)}.reply-line{width:3px;height:36px;background:var(--blue);border-radius:3px}.reply-text{flex:1;min-width:0}.reply-title{font-size:12px;color:var(--blue);font-weight:600}.reply-preview{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}.reply-close{background:none;font-size:22px;color:var(--muted);padding:4px 8px}
 #auth{height:100%;display:grid;place-items:center;padding:20px;background:linear-gradient(145deg,#dbeeff,#f7fbff)}
 .auth-card{width:min(420px,100%);background:#fff;border-radius:24px;padding:28px;box-shadow:0 18px 60px #0002}.auth-card h1{margin:0 0 6px}.auth-card p{color:var(--muted);margin:0 0 22px}
 .field{width:100%;padding:14px 15px;border:1px solid var(--line);border-radius:14px;margin:6px 0;outline:0}.field:focus{border-color:var(--blue)}
@@ -66,7 +66,7 @@ button,input,textarea{font:inherit}button{border:0;cursor:pointer}.hidden{displa
     </header>
     <div id="typing" class="typing"></div>
     <div id="messages" class="messages"><div class="empty">Выбери пользователя или группу слева.</div></div>
-    <form id="composer" class="composer">
+    <div id="replyBar" class="reply-bar hidden"><div class="reply-line"></div><div class="reply-text"><div id="replyTitle" class="reply-title"></div><div id="replyPreview" class="reply-preview"></div></div><button type="button" id="replyClose" class="reply-close">×</button></div><form id="composer" class="composer">
       <input id="fileInput" type="file" hidden accept="image/*,.pdf,.txt,.zip,.doc,.docx">
       <button type="button" id="attachBtn" class="attach-btn">📎</button>
       <textarea id="messageInput" placeholder="Сообщение..." rows="1"></textarea>
@@ -118,7 +118,7 @@ button,input,textarea{font:inherit}button{border:0;cursor:pointer}.hidden{displa
 
 <script>
 const $=id=>document.getElementById(id);
-let token=localStorage.getItem("messenger_token")||"", me=null, ws=null, users=[], groups=[], current=null, currentType=null, avatarData="", reconnectTimer=null, typingTimer=null, sendingMessage=false, outbox=[];
+let token=localStorage.getItem("messenger_token")||"", me=null, ws=null, users=[], groups=[], current=null, currentType=null, avatarData="", reconnectTimer=null, typingTimer=null, sendingMessage=false, outbox=[], replyTarget=null;
 const auth=$("auth"), app=$("app"), list=$("list"), messages=$("messages");
 
 function showStatus(t,ms=1800){const e=$("status");e.textContent=t;e.style.display="block";clearTimeout(showStatus.t);showStatus.t=setTimeout(()=>e.style.display="none",ms)}
@@ -149,8 +149,25 @@ async function loadPrivate(){const d=await api("/api/messages/"+encodeURICompone
 async function loadGroupMessages(){const d=await api("/api/groups/"+encodeURIComponent(current.id)+"/messages");renderMessages(d.messages||[]);sendReadReceipt()}
 
 function renderMessages(arr){messages.innerHTML="";if(!arr.length){messages.innerHTML='<div class="empty">Сообщений пока нет.<br>Напиши первым!</div>';return}arr.forEach(renderMessage);scroll()}
+function replySource(m){
+  if(!m.replyTo)return null;
+  const all=[...messages.querySelectorAll("[data-message-id]")];
+  const target=all.find(x=>x.dataset.messageId===m.replyTo);
+  return target;
+}
+function setReply(m){
+  if(!m||!m.id)return;
+  replyTarget=m;
+  $("replyTitle").textContent=m.from===me.id?"Ответ на ваше сообщение":"Ответ на "+userName(m.from);
+  $("replyPreview").textContent=m.deleted?"Сообщение удалено":(m.text||"📎 Файл");
+  $("replyBar").classList.remove("hidden");
+  $("messageInput").focus();
+}
+function clearReply(){replyTarget=null;$("replyBar").classList.add("hidden");$("replyTitle").textContent="";$("replyPreview").textContent=""}
+$("replyClose").onclick=clearReply;
+
 function readMark(m,pending){if(pending)return"🕐";if(m.from!==me.id)return"";if(currentType==="group"){const count=Object.keys(m.readBy||{}).length;return count?"✓✓":"✓"}return m.readAt?"✓✓":"✓"}
-function renderMessage(m,pending=false){const wrap=document.createElement("div");wrap.className="msg "+(m.from===me.id?"mine":"");if(m.clientId)wrap.dataset.clientId=m.clientId;if(m.id)wrap.dataset.messageId=m.id;const b=document.createElement("div");b.className="bubble"+(m.deleted?" deleted":"");b.textContent=m.deleted?"Сообщение удалено":m.text||"";if(m.attachment&&!m.deleted)renderAttachment(b,m.attachment);wrap.appendChild(b);const meta=document.createElement("div");meta.className="meta";meta.textContent=(m.from!==me.id&&currentType==="group"?userName(m.from)+" · ":"")+new Date(m.createdAt).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"})+(m.editedAt?" · изменено":"")+(pending?" · 🕐":(readMark(m,false)?" · "+readMark(m,false):""));wrap.appendChild(meta);if(m.from===me.id&&!m.deleted&&!pending){const a=document.createElement("div");a.className="actions";const ed=document.createElement("button");ed.textContent="Изменить";ed.onclick=()=>edit(m);const del=document.createElement("button");del.textContent="Удалить";del.onclick=()=>delMsg(m);a.append(ed,del);wrap.appendChild(a)}messages.appendChild(wrap)}
+function renderMessage(m,pending=false){const wrap=document.createElement("div");wrap.className="msg "+(m.from===me.id?"mine":"");if(m.clientId)wrap.dataset.clientId=m.clientId;if(m.id)wrap.dataset.messageId=m.id;if(m.replyTo){const q=document.createElement("div");q.className="reply-preview";q.style.cssText="padding:6px 8px;margin-bottom:5px;border-left:3px solid var(--blue);background:#f2f6fa;border-radius:7px";q.textContent="↩ "+(m.replyToText||"Ответ на сообщение");q.onclick=()=>{const target=messages.querySelector('[data-message-id="'+m.replyTo+'"]');if(target)target.scrollIntoView({behavior:"smooth",block:"center"})};wrap.appendChild(q)}const b=document.createElement("div");b.className="bubble"+(m.deleted?" deleted":"");b.textContent=m.deleted?"Сообщение удалено":m.text||"";if(m.attachment&&!m.deleted)renderAttachment(b,m.attachment);wrap.appendChild(b);const meta=document.createElement("div");meta.className="meta";meta.textContent=(m.from!==me.id&&currentType==="group"?userName(m.from)+" · ":"")+new Date(m.createdAt).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"})+(m.editedAt?" · изменено":"")+(pending?" · 🕐":(readMark(m,false)?" · "+readMark(m,false):""));wrap.appendChild(meta);if(!m.deleted&&!pending){const a=document.createElement("div");a.className="actions";const reply=document.createElement("button");reply.textContent="Ответить";reply.onclick=()=>setReply(m);a.appendChild(reply);if(m.from===me.id){const ed=document.createElement("button");ed.textContent="Изменить";ed.onclick=()=>edit(m);const del=document.createElement("button");del.textContent="Удалить";del.onclick=()=>delMsg(m);a.append(ed,del)}wrap.appendChild(a)}messages.appendChild(wrap)}
 function userName(id){const u=users.find(x=>x.id===id)||dbUser(id);return u?.displayName||u?.username||"Пользователь"}
 function dbUser(id){return id===me.id?me:null}
 function renderAttachment(parent,a){if(a.type.startsWith("image/")){const i=document.createElement("img");i.className="attach";i.src=a.data;i.alt=a.name;parent.appendChild(i)}const card=document.createElement("div");card.className="file-card";const link=document.createElement("a");link.href=a.data;link.download=a.name;link.textContent="📎 "+a.name+" ("+Math.max(1,Math.round((a.size||0)/1024))+" КБ)";card.appendChild(link);parent.appendChild(card)}
@@ -164,7 +181,7 @@ function flushOutbox(){if(!ws||ws.readyState!==1)return;const pending=outbox.spl
 async function edit(m){const t=prompt("Изменить сообщение:",m.text);if(t===null||!t.trim())return;sendWS({type:"edit",id:m.id,text:t.trim()})}
 function delMsg(m){if(confirm("Удалить сообщение?"))sendWS({type:"delete",id:m.id})}
 
-$("composer").onsubmit=async e=>{e.preventDefault();if(sendingMessage)return;const text=$("messageInput").value.trim();const f=$("fileInput").files[0];if(!current||(!text&&!f))return;sendingMessage=true;$("composer").querySelector(".send").disabled=true;try{let attachment=null;if(f){if(f.size>1800000)throw new Error("Файл слишком большой (максимум 1.8 МБ)");attachment=await readFile(f)}const clientId=crypto.randomUUID();const payload=currentType==="group"?{type:"groupMessage",groupId:current.id,text:text||" ",attachment,clientId}:{type:"message",to:current.id,text:text||" ",attachment,clientId};optimisticMessage({...payload,from:me.id,createdAt:new Date().toISOString()});if(ws&&ws.readyState===1)sendWS(payload);else{outbox.push(payload);showStatus("🕐 Отправится при восстановлении связи")}$("messageInput").value="";$("fileInput").value="";$("messageInput").focus()}catch(err){toast(err.message)}finally{sendingMessage=false;$("composer").querySelector(".send").disabled=false}}
+$("composer").onsubmit=async e=>{e.preventDefault();if(sendingMessage)return;const text=$("messageInput").value.trim();const f=$("fileInput").files[0];if(!current||(!text&&!f))return;sendingMessage=true;$("composer").querySelector(".send").disabled=true;try{let attachment=null;if(f){if(f.size>1800000)throw new Error("Файл слишком большой (максимум 1.8 МБ)");attachment=await readFile(f)}const clientId=crypto.randomUUID();const payload=currentType==="group"?{type:"groupMessage",groupId:current.id,text:text||" ",attachment,clientId,replyTo:replyTarget?.id||null,replyToText:replyTarget?.deleted?"Сообщение удалено":(replyTarget?.text||"📎 Файл")}:{type:"message",to:current.id,text:text||" ",attachment,clientId,replyTo:replyTarget?.id||null,replyToText:replyTarget?.deleted?"Сообщение удалено":(replyTarget?.text||"📎 Файл")};optimisticMessage({...payload,from:me.id,createdAt:new Date().toISOString()});if(ws&&ws.readyState===1)sendWS(payload);else{outbox.push(payload);showStatus("🕐 Отправится при восстановлении связи")}$("messageInput").value="";$("fileInput").value="";clearReply();$("messageInput").focus()}catch(err){toast(err.message)}finally{sendingMessage=false;$("composer").querySelector(".send").disabled=false}}
 function readFile(f){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res({name:f.name,type:f.type||"application/octet-stream",size:f.size,data:r.result});r.onerror=rej;r.readAsDataURL(f)})}
 $("attachBtn").onclick=()=>$("fileInput").click();
 $("messageInput").addEventListener("input",()=>{if(!ws||ws.readyState!==1||!current)return;sendWS(currentType==="group"?{type:"typing",groupId:current.id,typing:true}:{type:"typing",to:current.id,typing:true});clearTimeout(typingTimer);typingTimer=setTimeout(()=>sendWS(currentType==="group"?{type:"typing",groupId:current.id,typing:false}:{type:"typing",to:current.id,typing:false}),900)});
