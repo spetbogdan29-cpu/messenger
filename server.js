@@ -46,6 +46,11 @@ function normalizeData(data) {
   data.groups ||= [];
   data.groupMessages ||= [];
   data.pushSubscriptions ||= [];
+  data.users.forEach(u => {
+    u.favorites ||= [];
+    u.hiddenMessages ||= [];
+    u.notificationSettings ||= {foreground:true,push:true,sound:true};
+  });
   return data;
 }
 
@@ -157,7 +162,7 @@ function validateAttachment(a) {
   const data = String(a.data || "");
   if (data.length > 2_500_000) throw new Error("Файл слишком большой (максимум около 2 МБ)");
   if (!data.startsWith("data:")) throw new Error("Некорректный файл");
-  if (!/^(image|application|text)\//i.test(type)) throw new Error("Этот тип файла не поддерживается");
+  if (!/^(image|audio|application|text)\//i.test(type)) throw new Error("Этот тип файла не поддерживается");
   return { name, type, data, size: Number(a.size) || 0 };
 }
 async function notifyPush(userId, payload) {
@@ -229,7 +234,8 @@ app.get("/api/users", auth, (req,res) => {
 
 app.get("/api/messages/:otherId", auth, (req,res) => {
   const me=req.user.id, other=req.params.otherId;
-  const messages=db.data.messages.filter(m=>(m.from===me&&m.to===other)||(m.from===other&&m.to===me)).sort((a,b)=>a.createdAt.localeCompare(b.createdAt)).slice(-300);
+  const hidden=new Set(findUser(me)?.hiddenMessages||[]);
+  const messages=db.data.messages.filter(m=>!hidden.has(m.id)&&((m.from===me&&m.to===other)||(m.from===other&&m.to===me))).sort((a,b)=>a.createdAt.localeCompare(b.createdAt)).slice(-300);
   res.json({messages});
 });
 
@@ -280,7 +286,8 @@ app.post("/api/groups/:id/members", auth, async (req,res) => {
 app.get("/api/groups/:id/messages", auth, (req,res) => {
   const g=groupFor(req.params.id);
   if (!g || !isMember(g,req.user.id)) return res.status(404).json({error:"Группа не найдена"});
-  res.json({messages:db.data.groupMessages.filter(m=>m.groupId===g.id).sort((a,b)=>a.createdAt.localeCompare(b.createdAt)).slice(-300)});
+  const hidden=new Set(findUser(req.user.id)?.hiddenMessages||[]);
+  res.json({messages:db.data.groupMessages.filter(m=>m.groupId===g.id&&!hidden.has(m.id)).sort((a,b)=>a.createdAt.localeCompare(b.createdAt)).slice(-300)});
 });
 
 async function createPrivate(from,to,text,attachment,clientId,replyTo) {
@@ -321,6 +328,60 @@ async function deleteIn(list,messageId,userId) {
 
 const ALLOWED_REACTIONS = new Set(["❤️","👍","😂","😮","😢","🔥"]);
 
+function findAnyMessage(messageId) {
+  return db.data.messages.find(m=>m.id===messageId) || db.data.groupMessages.find(m=>m.id===messageId);
+}
+function canAccessMessage(userId, m) {
+  if (!m) return false;
+  if (m.groupId) {
+    const g=groupFor(m.groupId);
+    return !!g && isMember(g,userId);
+  }
+  return m.from===userId || m.to===userId;
+}
+function favoriteFor(userId, messageId) {
+  const u=findUser(userId);
+  if(!u) throw new Error("Пользователь не найден");
+  const m=findAnyMessage(messageId);
+  if(!canAccessMessage(userId,m)) throw new Error("Нет доступа");
+  u.favorites ||= [];
+  const i=u.favorites.indexOf(messageId);
+  if(i>=0) u.favorites.splice(i,1); else u.favorites.push(messageId);
+  return u.favorites.includes(messageId);
+}
+async function toggleFavorite(userId,messageId) {
+  const active=favoriteFor(userId,messageId);
+  await db.write();
+  sendUser(userId,{type:"favoriteUpdated",messageId,active});
+}
+async function togglePin(userId,messageId) {
+  const m=findAnyMessage(messageId);
+  if(!canAccessMessage(userId,m)) throw new Error("Нет доступа");
+  if(m.pinnedAt) { delete m.pinnedAt; delete m.pinnedBy; }
+  else { m.pinnedAt=new Date().toISOString(); m.pinnedBy=userId; }
+  await db.write();
+  if(m.groupId){
+    const g=groupFor(m.groupId);
+    for(const id of g.members) sendUser(id,{type:"messageUpdated",message:m});
+  } else {
+    sendUser(m.from,{type:"messageUpdated",message:m});
+    sendUser(m.to,{type:"messageUpdated",message:m});
+  }
+}
+async function deleteForMe(userId,messageId) {
+  const u=findUser(userId);
+  const m=findAnyMessage(messageId);
+  if(!u || !canAccessMessage(userId,m)) throw new Error("Нет доступа");
+  u.hiddenMessages ||= [];
+  if(!u.hiddenMessages.includes(messageId)) u.hiddenMessages.push(messageId);
+  await db.write();
+  sendUser(userId,{type:"messageHidden",messageId});
+}
+async function listFavorites(userId) {
+  const u=findUser(userId);
+  const ids=new Set(u?.favorites||[]);
+  return [...ids].map(findAnyMessage).filter(Boolean).filter(m=>canAccessMessage(userId,m)&&!(u.hiddenMessages||[]).includes(m.id)).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,300);
+}
 async function toggleReaction(userId, messageId, emoji) {
   if (!ALLOWED_REACTIONS.has(emoji)) throw new Error("Недопустимая реакция");
   const privateM = db.data.messages.find(m=>m.id===messageId);
@@ -388,6 +449,26 @@ async function markGroupRead(readerId, groupId) {
   }
 }
 
+app.get("/api/settings", auth, (req,res)=>{
+  const u=findUser(req.user.id);
+  res.json({settings:u?.notificationSettings||{foreground:true,push:true,sound:true}});
+});
+app.put("/api/settings", auth, async (req,res)=>{
+  const u=findUser(req.user.id);
+  if(!u) return res.status(404).json({error:"Пользователь не найден"});
+  const old=u.notificationSettings||{};
+  u.notificationSettings={
+    foreground:req.body.foreground===undefined?old.foreground!==false:!!req.body.foreground,
+    push:req.body.push===undefined?old.push!==false:!!req.body.push,
+    sound:req.body.sound===undefined?old.sound!==false:!!req.body.sound
+  };
+  await db.write();
+  res.json({settings:u.notificationSettings});
+});
+app.get("/api/favorites", auth, async (req,res)=>{
+  res.json({messages:await listFavorites(req.user.id)});
+});
+
 app.post("/api/push/subscribe", auth, async (req,res) => {
   const subscription=req.body.subscription;
   if (!subscription?.endpoint) return res.status(400).json({error:"Некорректная подписка"});
@@ -430,6 +511,12 @@ wss.on("connection",(ws,req)=>{
           const privateM=db.data.messages.find(m=>m.id===d.id);
           if(privateM){const m=await deleteIn(db.data.messages,d.id,user.id); sendUser(m.from,{type:"messageUpdated",message:m}); sendUser(m.to,{type:"messageUpdated",message:m});}
           else {const gm=db.data.groupMessages.find(m=>m.id===d.id); if(!gm) throw new Error("Сообщение не найдено"); const m=await deleteIn(db.data.groupMessages,d.id,user.id), g=groupFor(m.groupId); for(const id of g.members) sendUser(id,{type:"messageUpdated",message:m});}
+        } else if(d.type==="deleteForMe"){
+          await deleteForMe(user.id,d.id);
+        } else if(d.type==="favorite"){
+          await toggleFavorite(user.id,d.messageId);
+        } else if(d.type==="pin"){
+          await togglePin(user.id,d.messageId);
         } else if(d.type==="read"){
           if(d.groupId) await markGroupRead(user.id,d.groupId);
           else if(d.to) await markPrivateRead(user.id,d.to);
@@ -449,10 +536,10 @@ wss.on("connection",(ws,req)=>{
   } catch { ws.close(1008,"Unauthorized"); }
 });
 
-app.get("/health",(req,res)=>res.json({ok:true,version:"3.2.0",storage:"postgresql",users:db.data.users.length,groups:db.data.groups.length}));
+app.get("/health",(req,res)=>res.json({ok:true,version:"3.3.0",storage:"postgresql",users:db.data.users.length,groups:db.data.groups.length}));
 app.use((req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
 
-server.listen(PORT,"0.0.0.0",()=>console.log("Messenger 3.1 running on port "+PORT));
+server.listen(PORT,"0.0.0.0",()=>console.log("Messenger 3.3 running on port "+PORT));
 
 process.on("SIGTERM", async () => {
   try { await pool.end(); } finally { process.exit(0); }
