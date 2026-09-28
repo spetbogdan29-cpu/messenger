@@ -290,7 +290,7 @@ async function createPrivate(from,to,text,attachment,clientId) {
   if (!clean && !file) throw new Error("Добавь текст или файл");
   if (clean.length>4000) throw new Error("Слишком длинное сообщение");
   if (clientId) { const existing=db.data.messages.find(m=>m.from===from && m.clientId===clientId); if (existing) return null; }
-  const message={id:crypto.randomUUID(),from,to,text:clean,attachment:file,clientId:clientId||null,createdAt:new Date().toISOString(),editedAt:null,deleted:false};
+  const message={id:crypto.randomUUID(),from,to,text:clean,attachment:file,clientId:clientId||null,createdAt:new Date().toISOString(),editedAt:null,deleted:false,readAt:null};
   db.data.messages.push(message); await db.write(); return message;
 }
 async function createGroup(from,groupId,text,attachment,clientId) {
@@ -316,6 +316,46 @@ async function deleteIn(list,messageId,userId) {
   if (!m) throw new Error("Сообщение не найдено");
   if (m.from!==userId) throw new Error("Можно удалять только свои сообщения");
   m.text=""; m.deleted=true; m.editedAt=new Date().toISOString(); await db.write(); return m;
+}
+
+async function markPrivateRead(readerId, otherId) {
+  const now = new Date().toISOString();
+  const changed = [];
+  for (const m of db.data.messages) {
+    if (m.from === otherId && m.to === readerId && !m.deleted && !m.readAt) {
+      m.readAt = now;
+      changed.push(m);
+    }
+  }
+  if (!changed.length) return;
+  await db.write();
+  for (const m of changed) {
+    sendUser(m.from, {type:"messageRead", messageId:m.id, readAt:m.readAt, readerId});
+    sendUser(m.to, {type:"messageRead", messageId:m.id, readAt:m.readAt, readerId});
+  }
+}
+
+async function markGroupRead(readerId, groupId) {
+  const g = groupFor(groupId);
+  if (!g || !isMember(g, readerId)) throw new Error("Нет доступа к группе");
+  const now = new Date().toISOString();
+  const changed = [];
+  for (const m of db.data.groupMessages) {
+    if (m.groupId === groupId && m.from !== readerId && !m.deleted) {
+      m.readBy = m.readBy || {};
+      if (!m.readBy[readerId]) {
+        m.readBy[readerId] = now;
+        changed.push(m);
+      }
+    }
+  }
+  if (!changed.length) return;
+  await db.write();
+  for (const m of changed) {
+    for (const id of g.members) {
+      sendUser(id, {type:"groupMessageRead", messageId:m.id, readerId, readAt:m.readBy[readerId]});
+    }
+  }
 }
 
 app.post("/api/push/subscribe", auth, async (req,res) => {
@@ -360,6 +400,9 @@ wss.on("connection",(ws,req)=>{
           const privateM=db.data.messages.find(m=>m.id===d.id);
           if(privateM){const m=await deleteIn(db.data.messages,d.id,user.id); sendUser(m.from,{type:"messageUpdated",message:m}); sendUser(m.to,{type:"messageUpdated",message:m});}
           else {const gm=db.data.groupMessages.find(m=>m.id===d.id); if(!gm) throw new Error("Сообщение не найдено"); const m=await deleteIn(db.data.groupMessages,d.id,user.id), g=groupFor(m.groupId); for(const id of g.members) sendUser(id,{type:"messageUpdated",message:m});}
+        } else if(d.type==="read"){
+          if(d.groupId) await markGroupRead(user.id,d.groupId);
+          else if(d.to) await markPrivateRead(user.id,d.to);
         } else if(d.type==="typing"){
           if(d.to) sendUser(d.to,{type:"typing",from:user.id,typing:!!d.typing});
           if(d.groupId){const g=groupFor(d.groupId); if(g) for(const id of g.members) if(id!==user.id) sendUser(id,{type:"typing",from:user.id,groupId:g.id,typing:!!d.typing});}
