@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Mini Messenger</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#0f1115;color:#fff}
+button,input{font:inherit}
+.hidden{display:none!important}
+.app{height:100dvh;display:flex;flex-direction:column}
+.top{height:60px;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;background:#171a21;border-bottom:1px solid #2a2f39}
+.brand{font-weight:800}
+.me{font-size:13px;color:#aeb7c7}
+.auth{width:min(420px,92%);margin:auto;background:#171a21;padding:24px;border-radius:20px;box-shadow:0 15px 50px #0008}
+.auth h1{margin-top:0}
+.auth input,.search{width:100%;padding:13px;margin:6px 0;background:#0f1115;color:#fff;border:1px solid #343b48;border-radius:12px;outline:none}
+.primary{width:100%;padding:13px;border:0;border-radius:12px;background:#4f7cff;color:#fff;font-weight:700;margin-top:8px}
+.link{background:none;border:0;color:#83a4ff;margin-top:10px}
+.error{color:#ff8080;min-height:22px;font-size:14px}
+.layout{flex:1;display:grid;grid-template-columns:280px 1fr;min-height:0}
+.users{background:#14171d;border-right:1px solid #2a2f39;padding:12px;overflow:auto}
+.user{padding:12px;border-radius:12px;cursor:pointer}
+.user:hover,.user.active{background:#232936}
+.uname{font-weight:700}
+.sub{font-size:12px;color:#8993a5}
+.chat{display:flex;flex-direction:column;min-width:0}
+.chatHead{padding:14px 18px;border-bottom:1px solid #2a2f39;font-weight:800}
+.messages{flex:1;overflow:auto;padding:18px;display:flex;flex-direction:column;gap:8px}
+.msg{max-width:min(75%,520px);padding:10px 13px;border-radius:16px;background:#252a34;align-self:flex-start;word-break:break-word}
+.msg.mine{align-self:flex-end;background:#4169e1}
+.time{font-size:10px;opacity:.65;margin-top:3px}
+.composer{display:flex;gap:8px;padding:10px;border-top:1px solid #2a2f39}
+.composer input{flex:1;padding:13px;border-radius:14px;border:1px solid #343b48;background:#171a21;color:#fff;outline:none}
+.send{width:48px;border:0;border-radius:14px;background:#4f7cff;color:#fff}
+.empty{margin:auto;color:#7f899a;text-align:center}
+@media(max-width:700px){
+.layout{grid-template-columns:110px 1fr}
+.users{padding:6px}
+.user{padding:10px 6px}
+.uname{font-size:13px}
+.chatHead{padding:12px}
+.messages{padding:12px}
+.msg{max-width:85%}
+}
+</style>
+</head>
+
+<body>
+
+<div id="auth" class="app">
+  <div class="auth">
+    <h1>💬 Mini Messenger</h1>
+    <div id="authError" class="error"></div>
+    <input id="username" placeholder="Логин" autocomplete="username">
+    <input id="password" placeholder="Пароль" type="password" autocomplete="current-password">
+    <button id="authBtn" class="primary">Войти</button>
+    <button id="switchBtn" class="link">Нет аккаунта? Регистрация</button>
+  </div>
+</div>
+
+<div id="main" class="app hidden">
+  <div class="top">
+    <div class="brand">💬 Mini Messenger</div>
+    <div class="me" id="me"></div>
+  </div>
+
+  <div class="layout">
+    <aside class="users">
+      <input id="search" class="search" placeholder="Поиск...">
+      <div id="userList"></div>
+    </aside>
+
+    <section class="chat">
+      <div id="chatHead" class="chatHead">Выбери пользователя</div>
+
+      <div id="messages" class="messages">
+        <div class="empty">
+          Выбери человека слева, чтобы начать чат
+        </div>
+      </div>
+
+      <div class="composer">
+        <input id="messageInput" placeholder="Сообщение..." disabled>
+        <button id="sendBtn" class="send" disabled>➤</button>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+let token = localStorage.getItem("token");
+let me = null;
+let selected = null;
+let ws = null;
+let registerMode = false;
+
+async function api(url, options={}) {
+  const headers = {
+    "Content-Type":"application/json",
+    ...(options.headers||{})
+  };
+
+  if (token) {
+    headers.Authorization = "Bearer " + token;
+  }
+
+  const r = await fetch(url, {...options, headers});
+  const data = await r.json().catch(()=>({}));
+
+  if (!r.ok) {
+    throw new Error(data.error || "Ошибка сервера");
+  }
+
+  return data;
+}
+
+function showAuth() {
+  $("auth").classList.remove("hidden");
+  $("main").classList.add("hidden");
+}
+
+function showMain() {
+  $("auth").classList.add("hidden");
+  $("main").classList.remove("hidden");
+}
+
+$("switchBtn").onclick = () => {
+  registerMode = !registerMode;
+
+  $("authBtn").textContent =
+    registerMode ? "Зарегистрироваться" : "Войти";
+
+  $("switchBtn").textContent =
+    registerMode
+      ? "Уже есть аккаунт? Войти"
+      : "Нет аккаунта? Регистрация";
+
+  $("authError").textContent = "";
+};
+
+$("authBtn").onclick = async () => {
+  try {
+    $("authError").textContent = "";
+
+    const username = $("username").value.trim();
+    const password = $("password").value;
+
+    if (!username || !password) {
+      throw new Error("Введите логин и пароль");
+    }
+
+    const data = await api(
+      registerMode ? "/api/register" : "/api/login",
+      {
+        method:"POST",
+        body:JSON.stringify({
+          username,
+          password
+        })
+      }
+    );
+
+    token = data.token;
+    localStorage.setItem("token", token);
+
+    me = data.user;
+
+    await start();
+
+  } catch(e) {
+    $("authError").textContent = e.message;
+  }
+};
+
+async function start() {
+  showMain();
+
+  $("me").textContent = "@" + me.username;
+
+  connectWS();
+
+  await loadUsers();
+}
+
+function connectWS() {
+
+  const proto =
+    location.protocol === "https:" ? "wss" : "ws";
+
+  ws = new WebSocket(
+    `${proto}://${location.host}/?token=${encodeURIComponent(token)}`
+  );
+
+  ws.onmessage = async event => {
+
+    const data = JSON.parse(event.data);
+
+    if (data.type === "message") {
+
+      const m = data.message;
+
+      if (
+        selected &&
+        (
+          (m.from===me.id && m.to===selected.id) ||
+          (m.from===selected.id && m.to===me.id)
+        )
+      ) {
+
+        renderMessage(m);
+
+        $("messages").scrollTop =
+          $("messages").scrollHeight;
+      }
+    }
+  };
+
+  ws.onclose = () => {
+    setTimeout(connectWS,1500);
+  };
+}
+
+async function loadUsers(q="") {
+
+  const data = await api(
+    "/api/users?q=" +
+    encodeURIComponent(q)
+  );
+
+  $("userList").innerHTML = "";
+
+  data.users.forEach(u => {
+
+    const el = document.createElement("div");
+
+    el.className =
+      "user" +
+      (selected?.id===u.id ? " active":"");
+
+    el.innerHTML =
+      `<div class="uname">
+        @${escapeHtml(u.username)}
+      </div>
+      <div class="sub">
+        нажми, чтобы написать
+      </div>`;
+
+    el.onclick = () => selectUser(u);
+
+    $("userList").appendChild(el);
+  });
+}
+
+$("search").oninput = e => {
+  loadUsers(e.target.value);
+};
+
+async function selectUser(u) {
+
+  selected = u;
+
+  $("chatHead").textContent =
+    "@" + u.username;
+
+  $("messageInput").disabled = false;
+  $("sendBtn").disabled = false;
+
+  $("messages").innerHTML = "";
+
+  const data =
+    await api("/api/messages/"+u.id);
+
+  data.messages.forEach(renderMessage);
+
+  $("messages").scrollTop =
+    $("messages").scrollHeight;
+
+  loadUsers($("search").value);
+
+  $("messageInput").focus();
+}
+
+function renderMessage(m) {
+
+  const el =
+    document.createElement("div");
+
+  el.className =
+    "msg" +
+    (m.from===me.id ? " mine":"");
+
+  el.innerHTML =
+    `${escapeHtml(m.text)}
+    <div class="time">
+      ${new Date(m.createdAt)
+        .toLocaleTimeString([],{
+          hour:"2-digit",
+          minute:"2-digit"
+        })}
+    </div>`;
+
+  $("messages").appendChild(el);
+}
+
+function sendMessage() {
+
+  const text =
+    $("messageInput").value.trim();
+
+  if (
+    !selected ||
+    !text ||
+    !ws ||
+    ws.readyState!==1
+  ) {
+    return;
+  }
+
+  ws.send(
+    JSON.stringify({
+      type:"message",
+      to:selected.id,
+      text
+    })
+  );
+
+  $("messageInput").value = "";
+}
+
+$("sendBtn").onclick = sendMessage;
+
+$("messageInput").onkeydown = e => {
+
+  if (e.key==="Enter") {
+    sendMessage();
+  }
+};
+
+function escapeHtml(s) {
+
+  return s.replace(
+    /[&<>"']/g,
+    c => ({
+      '&':'&amp;',
+      '<':'&lt;',
+      '>':'&gt;',
+      '"':'&quot;',
+      "'":'&#039;'
+    }[c])
+  );
+}
+
+(async()=>{
+
+  if (!token) {
+    return showAuth();
+  }
+
+  try {
+
+    const data =
+      await api("/api/me");
+
+    me = data.user;
+
+    await start();
+
+  } catch {
+
+    localStorage.removeItem("token");
+
+    token = null;
+
+    showAuth();
+  }
+
+})();
+</script>
+
+</body>
+</html>
