@@ -1,0 +1,13 @@
+{
+  "name":"Messenger 3.3",
+  "short_name":"Messenger",
+  "description":"Личный мессенджер с группами, реакциями, файлами и голосовыми сообщениями",
+  "start_url":"/",
+  "scope":"/",
+  "display":"standalone",
+  "background_color":"#eef3f7",
+  "theme_color":"#3390ec",
+  "icons":[
+    {"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}
+  ]
+}
