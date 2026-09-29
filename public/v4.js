@@ -101,4 +101,138 @@
   }
 
   if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",init);else init();
+}
+
+  // Messenger 4.0 calls — WebRTC over the existing authenticated WebSocket.
+  let callPc=null, callStream=null, callRemote=null, callId=null, callKind="audio", callPeer=null, pendingCall=null, callUi=null;
+
+  function callModal(){
+    if(callUi)return callUi;
+    callUi=document.createElement("div"); callUi.id="v4CallModal"; callUi.className="v4-modal";
+    callUi.innerHTML='<div class="v4-card" style="max-width:720px;text-align:center"><h2 id="v4CallTitle">📞 Звонок</h2>'+
+      '<div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">'+
+      '<video id="v4LocalVideo" autoplay muted playsinline style="width:min(44vw,300px);max-height:260px;border-radius:14px;background:#000"></video>'+
+      '<video id="v4RemoteVideo" autoplay playsinline style="width:min(70vw,520px);max-height:360px;border-radius:14px;background:#000"></video></div>'+
+      '<audio id="v4RemoteAudio" autoplay></audio>'+
+      '<div id="v4CallStatus" class="v4-muted" style="margin-top:10px">Подключение…</div>'+
+      '<div class="v4-actions" style="justify-content:center">'+
+      '<button id="v4Mute" class="v4-btn">🎙️ Микрофон</button><button id="v4Cam" class="v4-btn">📷 Камера</button>'+
+      '<button id="v4Accept" class="v4-btn v4-primary" style="display:none">✅ Принять</button>'+
+      '<button id="v4Decline" class="v4-btn">❌ Отклонить</button></div></div>';
+    document.body.appendChild(callUi);
+    $("v4Mute").onclick=()=>{const t=callStream?.getAudioTracks?.()[0];if(t){t.enabled=!t.enabled;$("v4Mute").textContent=t.enabled?"🎙️ Микрофон":"🔇 Микрофон выключен"}};
+    $("v4Cam").onclick=()=>{const t=callStream?.getVideoTracks?.()[0];if(t){t.enabled=!t.enabled;$("v4Cam").textContent=t.enabled?"📷 Камера":"🚫 Камера выключена"}};
+    $("v4Decline").onclick=()=>endCall(true);
+    return callUi;
+  }
+  function setCallStatus(s){if($("v4CallStatus"))$("v4CallStatus").textContent=s}
+  function showCall(kind,title,incoming=false){
+    callModal(); $("v4CallTitle").textContent=(kind==="video"?"📹":"📞")+" "+title;
+    $("v4LocalVideo").style.display=kind==="video"?"block":"none";
+    $("v4RemoteVideo").style.display=kind==="video"?"block":"none";
+    $("v4RemoteAudio").style.display=kind==="video"?"none":"block";
+    $("v4Accept").style.display=incoming?"inline-block":"none";
+    $("v4Decline").textContent=incoming?"❌ Отклонить":"☎️ Завершить";
+    setCallStatus(incoming?"Входящий звонок…":"Подключение…");
+  }
+  function closeCallUi(){if(callUi){callUi.remove();callUi=null}}
+  function cleanupCall(){
+    try{callPc?.close()}catch{}
+    callPc=null;
+    callStream?.getTracks?.().forEach(t=>t.stop());
+    callStream=null; callRemote=null; callPeer=null; callId=null; pendingCall=null;
+    closeCallUi();
+  }
+  function endCall(notify=true){
+    if(notify&&callPeer&&callId)try{sendWS({type:"callEnd",to:callPeer,callId})}catch{}
+    cleanupCall();
+  }
+  async function setupPeer(kind,peer){
+    callKind=kind; callPeer=peer;
+    callPc=new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"}]});
+    callPc.onicecandidate=e=>{if(e.candidate&&callPeer)sendWS({type:"callIce",to:callPeer,callId,candidate:e.candidate})};
+    callPc.ontrack=e=>{
+      callRemote=e.streams[0];
+      const v=kind==="video"?$("v4RemoteVideo"):$("v4RemoteAudio");
+      if(v){v.srcObject=callRemote;v.play?.().catch(()=>{})}
+    };
+    callPc.onconnectionstatechange=()=>{
+      const s=callPc?.connectionState;
+      if(s==="connected")setCallStatus("Соединение установлено");
+      if(s==="failed"||s==="disconnected")setCallStatus("Соединение потеряно");
+      if(s==="closed")cleanupCall();
+    };
+    callStream=await navigator.mediaDevices.getUserMedia({audio:true,video:kind==="video"});
+    callStream.getTracks().forEach(t=>callPc.addTrack(t,callStream));
+    $("v4LocalVideo").srcObject=callStream;
+  }
+  async function startCall(kind){
+    if(typeof current==="undefined"||!current||typeof currentType==="undefined"||currentType!=="user")return toast("Звонить можно только пользователю");
+    if(!navigator.mediaDevices?.getUserMedia||typeof RTCPeerConnection==="undefined")return toast("Звонки не поддерживаются этим браузером");
+    if(callPc)return toast("Звонок уже идёт");
+    try{
+      callId=crypto.randomUUID(); callPeer=current.id; showCall(kind,(current.displayName||current.username||"пользователь"));
+      await setupPeer(kind,current.id);
+      const offer=await callPc.createOffer(); await callPc.setLocalDescription(offer);
+      sendWS({type:"callOffer",to:current.id,callId,kind,sdp:callPc.localDescription});
+      setCallStatus("Ожидание ответа…");
+    }catch(e){toast("Не удалось начать звонок: "+(e.message||"ошибка"));cleanupCall()}
+  }
+  async function acceptCall(){
+    if(!pendingCall)return;
+    const p=pendingCall; pendingCall=null;
+    $("v4Accept").style.display="none"; $("v4Decline").textContent="☎️ Завершить";
+    try{
+      callId=p.callId; callPeer=p.from; showCall(p.kind,"Входящий звонок");
+      await setupPeer(p.kind,p.from);
+      await callPc.setRemoteDescription(p.sdp);
+      const answer=await callPc.createAnswer(); await callPc.setLocalDescription(answer);
+      sendWS({type:"callAnswer",to:p.from,callId,kind:p.kind,sdp:callPc.localDescription});
+      setCallStatus("Подключение…");
+    }catch(e){toast("Не удалось принять звонок");endCall(true)}
+  }
+  async function handleCallSignal(d){
+    if(d.type==="callOffer"){
+      if(callPc){try{sendWS({type:"callDecline",to:d.from,callId:d.callId})}catch{};return}
+      pendingCall=d; callId=d.callId; callPeer=d.from;
+      const u=(typeof users!=="undefined"?users.find(x=>x.id===d.from):null);
+      showCall(d.kind,u?.displayName||u?.username||"пользователь",true);
+      $("v4Accept").onclick=acceptCall;
+      return;
+    }
+    if(d.type==="callAnswer"&&callPc&&d.callId===callId){
+      await callPc.setRemoteDescription(d.sdp); setCallStatus("Подключение…"); return;
+    }
+    if(d.type==="callIce"&&callPc&&d.callId===callId&&d.candidate){
+      try{await callPc.addIceCandidate(d.candidate)}catch{}
+      return;
+    }
+    if((d.type==="callEnd"||d.type==="callDecline")&&(!callId||d.callId===callId)){
+      setCallStatus(d.type==="callDecline"?"Звонок отклонён":"Звонок завершён");
+      setTimeout(cleanupCall,500); return;
+    }
+  }
+  function bindCallSocket(){
+    if(typeof ws==="undefined"||!ws)return;
+    ws.onmessage=async e=>{
+      let d;try{d=JSON.parse(e.data)}catch{return}
+      if(["callOffer","callAnswer","callIce","callEnd","callDecline"].includes(d.type)){try{await handleCallSignal(d)}catch{};return}
+      try{await onWS(e)}catch{}
+    };
+  }
+
+  function addCallButtons(){
+    const head=document.querySelector(".chat-head"); if(!head||$("v4AudioCallBtn"))return;
+    const pin=$("pinBtn");
+    addButton(head,"v4AudioCallBtn","Аудиозвонок","📞",()=>startCall("audio"));
+    addButton(head,"v4VideoCallBtn","Видеозвонок","📹",()=>startCall("video"));
+    if(pin){head.insertBefore($("v4AudioCallBtn"),pin);head.insertBefore($("v4VideoCallBtn"),pin)}
+  }
+
+  const v4OriginalConnect=connect;
+  connect=()=>{v4OriginalConnect();setTimeout(bindCallSocket,50)};
+  bindCallSocket();
+  addCallButtons();
+  setInterval(()=>{bindCallSocket();addCallButtons()},1200);
+
 })();

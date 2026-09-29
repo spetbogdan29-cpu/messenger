@@ -495,7 +495,15 @@ wss.on("connection",(ws,req)=>{
     ws.on("message",async raw=>{
       try {
         const d=JSON.parse(raw.toString());
-        if(d.type==="message"){
+        if(d.type==="callOffer" || d.type==="callAnswer" || d.type==="callIce" || d.type==="callEnd" || d.type==="callDecline"){
+          const target=String(d.to||"");
+          if(!target || !findUser(target)) throw new Error("Пользователь не найден");
+          if(!sockets.has(target)) throw new Error("Пользователь сейчас не в сети");
+          const payload={type:d.type,from:user.id,to:target,callId:String(d.callId||""),kind:d.kind==="video"?"video":"audio"};
+          if(d.sdp) payload.sdp=d.sdp;
+          if(d.candidate) payload.candidate=d.candidate;
+          sendUser(target,payload);
+        } else if(d.type==="message"){
           const m=await createPrivate(user.id,d.to,d.text,d.attachment,d.clientId,d.replyTo);
           if (!m) return;
           sendUser(m.from,{type:"message",message:m}); sendUser(m.to,{type:"message",message:m});
