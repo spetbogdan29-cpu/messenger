@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#3390ec">
 <link rel="manifest" href="/manifest.json">
-<title>Messenger 3.3</title>
+<title>Messenger 4.0</title>
 <style>
 :root{--blue:#3390ec;--bg:#eef3f7;--panel:#fff;--text:#17212b;--muted:#7d8b99;--line:#e4e9ee;--bubble:#fff;--mine:#d9fdd3}
 *{box-sizing:border-box}html,body{margin:0;height:100%;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:var(--text);background:var(--bg)}
@@ -40,7 +40,7 @@ button,input,textarea{font:inherit}button{border:0;cursor:pointer}.hidden{displa
 <div id="status" class="status"></div>
 <section id="auth">
   <div class="auth-card">
-    <h1>💬 Messenger 3.2</h1><p>Личные сообщения, группы, файлы и профиль</p>
+    <h1>💬 Messenger 4.0</h1><p>Личные сообщения, группы, файлы и профиль</p>
     <input id="login" class="field" placeholder="Логин" autocomplete="username">
     <input id="password" class="field" placeholder="Пароль" type="password" autocomplete="current-password">
     <div class="auth-actions"><button id="loginBtn" class="primary">Войти</button><button id="registerBtn" class="secondary">Регистрация</button></div>
@@ -366,5 +366,6 @@ $("demoNotif").onclick=async()=>{if(!("Notification"in window))return toast("У�
 
 if(token)start();
 </script>
-<script src="/v4.js"></script>\n</body>
+<script src="/v4.js"></script>
+</body>
 </html>
