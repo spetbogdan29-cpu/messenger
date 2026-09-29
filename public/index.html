@@ -302,9 +302,8 @@ function urlBase64(s){const pad="=".repeat((4-s.length%4)%4),raw=atob((s+pad).re
 $("demoNotif").onclick=async()=>{if(!("Notification"in window))return toast("Уведомления не поддерживаются");const p=await Notification.requestPermission();toast(p==="granted"?"Уведомления включены":"Уведомления отключены");if(p==="granted")registerPush()};
 
 if(token)start();
-</script>
-</body>
-unction readFile(f){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res({name:f.name,type:f.type||"application/octet-stream",size:f.size,data:r.result});r.onerror=rej;r.readAsDataURL(f)})}
+
+function readFile(f){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res({name:f.name,type:f.type||"application/octet-stream",size:f.size,data:r.result});r.onerror=rej;r.readAsDataURL(f)})}
 $("attachBtn").onclick=()=>$("fileInput").click();
 $("micBtn").onclick=async()=>{
   if(recording){mediaRecorder?.stop();return}
